@@ -25,11 +25,11 @@ Before using the skill, set up your Miget API token:
 
 1. Sign in at [app.miget.com](https://app.miget.com)
 2. Go to **My Account > [API Tokens](https://app.miget.com/my_account#api_tokens)**
-3. Create a new token (it starts with `miget_api_`)
+3. Create a new token (it starts with `miget_live_`)
 4. Export it in your shell:
 
 ```bash
-export MIGET_API_TOKEN="miget_api_xxxxxxxxxxxxx"
+export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"
 ```
 
 The agent will automatically detect the token from your environment. For persistent setup, add the export to your `~/.zshrc` or `~/.bashrc`.

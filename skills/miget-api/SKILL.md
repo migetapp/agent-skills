@@ -63,11 +63,11 @@ Miget API supports two authentication methods:
 1. **Generate API token** in the web UI:
    - Go to `https://app.miget.com/my_account#api_tokens`
    - Create a new API token
-   - Copy the token (starts with `miget_api_` prefix)
+   - Copy the token (starts with `miget_live_` prefix)
 
 2. **Use API token** in requests:
    ```http
-   Authorization: Bearer miget_api_xxxxxxxxxxxxx
+   Authorization: Bearer miget_live_xxxxxxxxxxxxx
    ```
 
    - API tokens don't expire (unless manually revoked)
@@ -98,7 +98,7 @@ These are non-negotiable - skipping them leads to failed requests or broken reso
      1. Go to **https://app.miget.com/my_account#api_tokens**
      2. Click **"Create new token"**
      3. Give it a name (e.g., `cli-agent`)
-     4. Copy the token (it starts with `miget_api_`)
+     4. Copy the token (it starts with `miget_live_`)
      5. Share it back so you can proceed, then suggest storing it (see Step 4).
    - **"I don't have an account"** - Direct them to sign up first:
      1. Go to **https://app.miget.com/users/sign_up**
@@ -113,19 +113,19 @@ These are non-negotiable - skipping them leads to failed requests or broken reso
 
    For **zsh** (default on macOS):
    ```bash
-   echo 'export MIGET_API_TOKEN="miget_api_xxxxxxxxxxxxx"' >> ~/.zshrc
+   echo 'export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"' >> ~/.zshrc
    source ~/.zshrc
    ```
 
    For **bash**:
    ```bash
-   echo 'export MIGET_API_TOKEN="miget_api_xxxxxxxxxxxxx"' >> ~/.bashrc
+   echo 'export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"' >> ~/.bashrc
    source ~/.bashrc
    ```
 
    For **fish**:
    ```fish
-   set -Ux MIGET_API_TOKEN "miget_api_xxxxxxxxxxxxx"
+   set -Ux MIGET_API_TOKEN "miget_live_xxxxxxxxxxxxx"
    ```
 
    Once stored, the token will be detected automatically in Step 1 on every future session.
