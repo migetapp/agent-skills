@@ -207,7 +207,7 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - Apps can have **cronjobs** (scheduled tasks)
 - Apps can have **domains** (custom domains)
 - Apps can have **environment variables** (vars)
-- Apps can have **ports** (exposed ports)
+- Apps can have **ports** (exposed ports). Port `5000` is fixed: HTTP traffic on the app's `*.migetapp.com` URL is always served from port `5000` — the app must listen on `5000`, and this port cannot be removed or changed. Additional TCP/UDP ports can be added for custom protocols; they are **private by default** and can be exposed publicly via the expose endpoint (see workflow 9, and https://docs.miget.com/networking/ports for the full list of supported ports).
 
 ### Projects
 
@@ -860,7 +860,7 @@ When creating resources, ask the user for all required fields before making the 
 
 Each `deployment_method` requires different fields in `deployment_config`:
 
-**`git_push`** - Deploy by pushing to a Miget-hosted Git remote. No `deployment_config` needed at creation. After the app is created, the platform provides a Git remote URL. The user pushes code to that remote to trigger a build.
+**`git_push`** - Deploy by pushing code to a Miget-hosted Git remote. No `deployment_config` fields are required at creation.
 
 ```json
 {
@@ -876,6 +876,38 @@ Each `deployment_method` requires different fields in `deployment_config`:
 |-------|------|---------|-------------|
 | `dockerfile_path` | string | `"./Dockerfile"` | Path to Dockerfile in the repository |
 | `build_context` | string | `"."` | Docker build context directory |
+
+**Helping the user deploy a `git_push` app.** The API does not expose the Git token value, so after the app is created you must walk the user through pushing from their machine:
+
+1. **Get a token.** Direct the user to their app's Git Tokens settings page to view (or create) a token:
+
+   `https://app.miget.com/apps/{APP_UUID}/settings#git_tokens`
+
+   - For the auto-created default token, the Git **username** is the resource (miget) name and the **password** is the token value.
+   - For any additional token the user creates, the **username** is the token's name and the **password** is the token value.
+   - A token can only be viewed once — if it says "Token already seen", the user must create a new one on that page.
+
+2. **Build the remote URL.** The remote is region-specific: `https://git.{region_code}.miget.io/{miget_name}/{app_name}` (for example, `https://git.eu-east-1.miget.io/my-resource/my-app`). You can read `region.code`, `miget.name`, and `name` from `GET /api/v1/apps/{uuid}`.
+
+3. **Guide the user through the push.**
+
+   New repository:
+   ```bash
+   git init
+   git config push.autoSetupRemote true
+   git remote add miget https://git.{region_code}.miget.io/{miget_name}/{app_name}
+   git add .
+   git commit -a -m "initial"
+   git push miget
+   ```
+
+   Existing repository:
+   ```bash
+   git remote add miget https://git.{region_code}.miget.io/{miget_name}/{app_name}
+   git push miget
+   ```
+
+   When git prompts for credentials, use the username/password from step 1. The push triggers a build and deploy — monitor it via `GET /api/v1/apps/{uuid}/deployments` (see workflow 2).
 
 **`public_git`** - Deploy from a public Git repository URL.
 
@@ -1496,6 +1528,7 @@ What would you like to set up?"
 - Requires `apps:manage` permission
 - Port management is not available on free plan resources
 - Ports can be exposed publicly or made private after creation using separate endpoints
+- Port `5000` is fixed for HTTP traffic on the app's `*.migetapp.com` URL — it is auto-created, cannot be removed or changed, and the app must listen on it. Use this endpoint to add extra TCP/UDP ports for custom protocols; they are **private by default** — use `expose_publicly` to make them reachable from outside the cluster. See https://docs.miget.com/networking/ports for the full list of supported ports.
 
 **Example questions to ask:**
 - "What workspace name?"
@@ -1782,6 +1815,12 @@ Creates a storage addon on the app linked to this service.
    - Resources are region-specific
    - Choose appropriate plan type (`dev` for development, `pro` for production)
    - Add components (extra RAM/CPU) as needed
+
+6. **Troubleshooting a "URL not reachable" complaint**
+   - **Check the ports first.**
+     - If the user is hitting the default `*.migetapp.com` URL: the app must listen on port `5000` (HTTP is always served from `5000` and cannot be changed). If it's listening on a different port, tell the user to change the app to listen on `5000`.
+     - If the user is hitting a custom TCP/UDP port directly: list ports via `GET /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports` and confirm the port exists and is public. Extra ports are **private by default** — expose them with `expose_publicly`.
+   - Only after ports look right, check deployment status, domains, and logs.
 
 ---
 
