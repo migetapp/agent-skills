@@ -314,7 +314,6 @@ POST /api/v1/apps
   "name": "my-app",
   "label": "My Application",
   "project_id": "{project-uuid}",
-  "region_id": "{region-uuid}",
   "resource_id": "{resource-uuid}",
   "builder": "auto",
   "ram_size": 256,
@@ -343,7 +342,6 @@ POST /api/v1/apps
   "name": "my-nginx",
   "label": "My Nginx",
   "project_id": "{project-uuid}",
-  "region_id": "{region-uuid}",
   "resource_id": "{resource-uuid}",
   "builder": "dockerfile",
   "ram_size": 256,
@@ -363,7 +361,6 @@ POST /api/v1/apps
   "name": "my-rails-app",
   "label": "My Rails App",
   "project_id": "{project-uuid}",
-  "region_id": "{region-uuid}",
   "resource_id": "{resource-uuid}",
   "builder": "dockerfile",
   "ram_size": 512,
@@ -551,6 +548,7 @@ POST /api/v1/services/{service-id}/create_replica
 - Deleting a primary automatically deletes all its replicas
 - Replica creation is asynchronous - poll the addon/service status to track provisioning
 - Replicas can be promoted to standalone instances using the promote endpoint - this is irreversible and the promoted instance will no longer receive updates from the primary
+- The `create_replica` endpoint returns the full serialized replica entity (same shape as `GET /api/v1/apps/{uuid}/addons/{id}` or `GET /api/v1/services/{id}`), including `uuid`, `role: "replica"`, `primary_addon_uuid`, and `connection_details` - no follow-up `GET` is required to discover the new replica
 
 **Response fields for PostgreSQL addons/services:**
 - `role` (string) - `"primary"` or `"replica"` (null for non-PostgreSQL)
@@ -601,7 +599,6 @@ POST /api/v1/apps
   "name": "my-rails-app",
   "label": "My Rails App",
   "project_id": "{project-uuid}",
-  "region_id": "{region-uuid}",
   "resource_id": "{resource-uuid}",
   "builder": "dockerfile",
   "deployment_method": "kamal",
@@ -845,11 +842,10 @@ When creating resources, ask the user for all required fields before making the 
 - `name` (string) - Unique service name (lowercase, alphanumeric with hyphens, used in URLs)
 - `label` (string) - Human-readable display name
 - `project_id` (string) - UUID of the project to create the application in (get from `GET /api/v1/projects`)
-- `region_id` (string) - UUID of the deployment region (get from `GET /api/v1/regions`)
+- `resource_id` (string) - UUID of the compute resource (Miget) to assign (get from `GET /api/v1/resources`). The app's region is derived from this resource.
 - `builder` (string) - Build strategy: `"auto"`, `"dockerfile"`, or `"custom"`
 
 **Optional but important:**
-- `resource_id` (string) - UUID of compute resource (Miget) to assign (get from `GET /api/v1/resources`). If not provided, app will be created without compute power.
 - `ram_size` (float) - RAM allocation in MiB
 - `cpu_size` (float) - CPU allocation in cores
 - `deployment_method` (string) - `"git_push"`, `"public_git"`, `"github"`, `"container_registry"`, `"parent_image"`, or `"kamal"`. Note: the enum value is `container_registry` (not `docker_registry`).
@@ -967,7 +963,9 @@ Each `deployment_method` requires different fields in `deployment_config`:
   "deployment_config": {
     "credential_id": "{registry-credential-uuid}",
     "image_url": "docker.io/library/nginx",
-    "tag": "latest"
+    "tag": "latest",
+    "command": ["/opt/keycloak/bin/kc.sh"],
+    "args": ["start", "--optimized"]
   }
 }
 ```
@@ -977,6 +975,8 @@ Each `deployment_method` requires different fields in `deployment_config`:
 | `image_url` | string | Yes | - | Full container image URL (e.g., `docker.io/library/nginx`) |
 | `tag` | string | No | `"latest"` | Container image tag |
 | `credential_id` | string | No | - | UUID of container registry credentials (for private registries) |
+| `command` | array of strings | No | - | Override the image's `ENTRYPOINT` (Kubernetes `container.command`). Leave unset to use the image default. |
+| `args` | array of strings | No | - | Override the image's `CMD` (Kubernetes `container.args`). Leave unset to use the image default. Use this when an image's ENTRYPOINT is set but no CMD is supplied (e.g. Keycloak prints help on bare run; pass `["start"]` to start the server). |
 
 **`parent_image`** - Inherit the container image from another app on the platform. When the parent app deploys, this app can auto-sync.
 
@@ -1858,7 +1858,6 @@ POST /api/v1/apps
   "name": "api-server",
   "label": "API Server",
   "project_id": "{project-uuid}",
-  "region_id": "{region-uuid}",
   "resource_id": "{resource-uuid}",
   "builder": "auto",
   "ram_size": 256,
@@ -1921,7 +1920,6 @@ POST /api/v1/apps
   "name": "my-rails-app",
   "label": "My Rails App",
   "project_id": "{project-uuid}",
-  "region_id": "{region-uuid}",
   "resource_id": "{resource-uuid}",
   "builder": "dockerfile",
   "ram_size": 512,
