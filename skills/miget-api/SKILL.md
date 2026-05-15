@@ -451,11 +451,11 @@ PUT /api/v1/apps/{app-uuid}/domains/{domain-uuid}
 ### 6. Create and Manage a Storage Bucket
 
 ```http
-# Step 1: Create a bucket (requires an existing resource/Miget)
+# Step 1: Create a bucket (requires an existing resource)
 POST /api/v1/buckets
 {
   "label": "My Assets Bucket",
-  "miget_id": 123,
+  "resource_id": "01H...resource-uuid...",
   "visibility": "private_access",
   "disk_size": 1.0
 }
@@ -692,9 +692,10 @@ PUT /api/v1/apps/{app-uuid}/deployment
 
 - `GET /api/v1/apps/{uuid}/domains` - List app domains
 - `POST /api/v1/apps/{uuid}/domains` - Add domain
-- `GET /api/v1/apps/{uuid}/domains/{domain_uuid}` - Get domain details
+- `GET /api/v1/apps/{uuid}/domains/{domain_uuid}` - Get domain details (returns `verification_status`, `verification_token`, `dns_target`)
 - `PUT /api/v1/apps/{uuid}/domains/{domain_uuid}` - Update domain
 - `DELETE /api/v1/apps/{uuid}/domains/{domain_uuid}` - Remove domain
+- `POST /api/v1/apps/{uuid}/domains/{domain_uuid}/verify` - Trigger DNS verification. Caller is expected to have already published `TXT _migetapp-verify.<domain> = <verification_token>` (returned by GET). The check runs async (Fibonacci backoff up to 60min); poll the GET endpoint until `verification_status` becomes `verified` and `dns_target` is populated.
 
 ### App Environment Variables
 
@@ -1166,7 +1167,7 @@ A service is a standalone resource (e.g., database, shared storage) that can be 
 *   **Required:**
     *   `service_type` (string): The type of service. Must be one of `postgres`, `shared_storage`.
     *   `project_id` (string): The UUID of the project this service will belong to.
-    *   `miget_id` (string): The UUID of the compute resource (Miget) where the service will be provisioned.
+    *   `resource_id` (string): The UUID of the compute resource where the service will be provisioned. (Legacy alias: `miget_id` — deprecated, still accepted for backward compatibility.)
     *   `label` (string): A human-readable display name for the service.
 *   **Optional:**
     *   `ram_size` (float): RAM allocation in MiB.
@@ -1229,7 +1230,7 @@ A standalone shared storage volume service.
 
 **Required fields:**
 - `label` (string) - Human-readable display name for the bucket
-- `miget_id` (integer) - ID of the compute resource (Miget) to attach the bucket to (get from `GET /api/v1/resources`)
+- `resource_id` (string) - UUID of the compute resource to attach the bucket to (get from `GET /api/v1/resources`). Legacy alias `miget_id` is still accepted but deprecated.
 
 **Optional but important:**
 - `visibility` (string) - Bucket visibility: `"public_access"` or `"private_access"` (default: `"private_access"`)
@@ -1744,6 +1745,14 @@ Configures auto-scaling. Not available on free plan.
 - `scaling_start_time` (string) - Start time for scaling window (HH:MM, 24-hour)
 - `scaling_end_time` (string) - End time for scaling window (HH:MM, 24-hour)
 - `within_resources` (boolean) - Limit scaling to available resource allocation
+
+### Change Application State (`PATCH /api/v1/apps/{uuid}/state`)
+
+**Required fields:**
+- `uuid` (string, path) - Application UUID
+- `state` (string) - Target state: `schedule_start`, `schedule_stop`, or `schedule_restart`
+
+Note: apps use `schedule_*` values. Addons and services use `process_*` values (see below) — they are not interchangeable.
 
 ### Change Addon State (`PATCH /api/v1/apps/{uuid}/addons/{id}/state`)
 
