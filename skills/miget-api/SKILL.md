@@ -555,30 +555,33 @@ POST /api/v1/services/{service-id}/create_replica
 - `primary_addon_uuid` (string) - UUID of the primary addon (only present on replicas)
 - `replicas` (array) - List of replicas with `uuid`, `name`, `label`, `state` (only present on primaries, in show endpoints)
 
-### 9. Manage App Ports (requires workspace_name and app_name)
+### 9. Manage App Ports
 
-App ports use a different URL pattern than other endpoints - they require `workspace_name` and `app_name` path segments in addition to the app UUID. This is because port routing operates at the Kubernetes namespace level, which maps to workspace and app names rather than UUIDs.
+App ports are managed through the standard app-UUID-scoped endpoints. Port `5000` is auto-created for HTTP traffic; use these endpoints to add extra TCP/UDP ports.
 
 ```http
 # List all ports
-GET /api/v1/apps/{app-uuid}/workspaces/{workspace-name}/apps/{app-name}/ports
+GET /api/v1/apps/{app-uuid}/ports
 
 # Create a new port
-POST /api/v1/apps/{app-uuid}/workspaces/{workspace-name}/apps/{app-name}/ports
+POST /api/v1/apps/{app-uuid}/ports
 {
   "internal_port": 8080,
   "protocol": "tcp",
   "public": false
 }
 
+# Get port details
+GET /api/v1/apps/{app-uuid}/ports/{port-id}
+
 # Expose port publicly
-PATCH /api/v1/apps/{app-uuid}/workspaces/{workspace-name}/apps/{app-name}/ports/{port-id}/expose_publicly
+PATCH /api/v1/apps/{app-uuid}/ports/{port-id}/expose_publicly
 
 # Make port private
-PATCH /api/v1/apps/{app-uuid}/workspaces/{workspace-name}/apps/{app-name}/ports/{port-id}/make_private
+PATCH /api/v1/apps/{app-uuid}/ports/{port-id}/make_private
 
 # Delete port
-DELETE /api/v1/apps/{app-uuid}/workspaces/{workspace-name}/apps/{app-name}/ports/{port-id}
+DELETE /api/v1/apps/{app-uuid}/ports/{port-id}
 ```
 
 ### 10. Create and Deploy with Kamal
@@ -739,14 +742,12 @@ PUT /api/v1/apps/{app-uuid}/deployment
 
 ### App Ports
 
-Note: Port endpoints use a nested path that includes workspace and app names alongside the UUID. See workflow section 8 for details on why.
-
-- `GET /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports` - List all ports for an app
-- `POST /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports` - Create a new port (requires apps:manage, not available on free plan)
-- `GET /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports/{id}` - Get port details
-- `DELETE /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports/{id}` - Delete a port
-- `PATCH /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports/{id}/expose_publicly` - Expose a port publicly (requires apps:manage, not available on free plan)
-- `PATCH /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports/{id}/make_private` - Make a port private (requires apps:manage)
+- `GET /api/v1/apps/{uuid}/ports` - List all ports for an app
+- `POST /api/v1/apps/{uuid}/ports` - Create a new port (requires apps:manage, not available on free plan)
+- `GET /api/v1/apps/{uuid}/ports/{port_id}` - Get port details
+- `DELETE /api/v1/apps/{uuid}/ports/{port_id}` - Delete a port
+- `PATCH /api/v1/apps/{uuid}/ports/{port_id}/expose_publicly` - Expose a port publicly (requires apps:manage, not available on free plan)
+- `PATCH /api/v1/apps/{uuid}/ports/{port_id}/make_private` - Make a port private (requires apps:manage)
 
 ### Buckets (S3-Compatible Object Storage)
 
@@ -1514,11 +1515,9 @@ What would you like to set up?"
 - "If daily, what time? (HH:MM format)"
 - "What command should be executed?"
 
-### Create App Port (`POST /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports`)
+### Create App Port (`POST /api/v1/apps/{uuid}/ports`)
 
 **Required fields:**
-- `workspace_name` (string) - Workspace name
-- `app_name` (string) - Application name
 - `internal_port` (integer) - Internal port number (1-65535)
 - `protocol` (string) - Protocol: `"tcp"` or `"udp"`
 
@@ -1532,8 +1531,6 @@ What would you like to set up?"
 - Port `5000` is fixed for HTTP traffic on the app's `*.migetapp.com` URL — it is auto-created, cannot be removed or changed, and the app must listen on it. Use this endpoint to add extra TCP/UDP ports for custom protocols; they are **private by default** — use `expose_publicly` to make them reachable from outside the cluster. See https://docs.miget.com/networking/ports for the full list of supported ports.
 
 **Example questions to ask:**
-- "What workspace name?"
-- "What application name?"
 - "What internal port number? (1-65535)"
 - "What protocol? (tcp or udp)"
 - "Should this port be publicly accessible? (true/false)"
@@ -1828,7 +1825,7 @@ Creates a storage addon on the app linked to this service.
 6. **Troubleshooting a "URL not reachable" complaint**
    - **Check the ports first.**
      - If the user is hitting the default `*.migetapp.com` URL: the app must listen on port `5000` (HTTP is always served from `5000` and cannot be changed). If it's listening on a different port, tell the user to change the app to listen on `5000`.
-     - If the user is hitting a custom TCP/UDP port directly: list ports via `GET /api/v1/apps/{uuid}/workspaces/{workspace_name}/apps/{app_name}/ports` and confirm the port exists and is public. Extra ports are **private by default** — expose them with `expose_publicly`.
+     - If the user is hitting a custom TCP/UDP port directly: list ports via `GET /api/v1/apps/{uuid}/ports` and confirm the port exists and is public. Extra ports are **private by default** — expose them with `expose_publicly`.
    - Only after ports look right, check deployment status, domains, and logs.
 
 ---
