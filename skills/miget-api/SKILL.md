@@ -653,7 +653,7 @@ PUT /api/v1/apps/{app-uuid}/deployment
 
 - `GET /api/v1/apps` - List all applications
 - `POST /api/v1/apps` - Create new application
-- `GET /api/v1/apps/{uuid}` - Get application details (includes `deployment_method` and `deployment_config` with method-specific fields; for Kamal apps this includes `registry_password`, `registry_hostname`, `registry_username`, `registry_image`, and `ssh_keys`)
+- `GET /api/v1/apps/{uuid}` - Get application details (includes `deployment_method` and `deployment_config` with method-specific fields; for Kamal apps this includes `registry_password`, `registry_hostname`, `registry_username`, `registry_image`, and `ssh_keys`; also includes a nested `region` object with `id`, `name`, and `code`)
 - `PUT /api/v1/apps/{uuid}` - Update application
 - `DELETE /api/v1/apps/{uuid}` - Delete application
 - `PUT /api/v1/apps/{uuid}/security` - Update security settings (network connectivity, Basic Authentication)
