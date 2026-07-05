@@ -162,6 +162,7 @@ These are non-negotiable - skipping them leads to failed requests or broken reso
    - Verify resource exists (if assigning to app)
    - Verify region exists (if creating resource)
    - Check if names are available (apps, projects must be unique within a workspace)
+   - **Validate user-supplied links.** When the user gives a source URL — a `public_git` repository, a `container_registry` image reference, or a stack `repository_url` — check its format before sending the request. The platform rejects malformed or unreachable sources at creation, so catching it first lets you correct the user instead of surfacing a 422. See the per-method format rules under "Deployment Configuration by Method" (public Git URLs and container image references).
 
 **9. Provide helpful follow-up.** After creating resources, confirm what was created, provide the UUID/ID, and suggest logical next steps (e.g., "App created! Would you like me to deploy it?").
 
@@ -208,6 +209,7 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - Apps can have **domains** (custom domains)
 - Apps can have **environment variables** (vars)
 - Apps can have **ports** (exposed ports). Port `5000` is fixed: HTTP traffic on the app's `*.migetapp.com` URL is always served from port `5000` — the app must listen on `5000`, and this port cannot be removed or changed. Additional TCP/UDP ports can be added for custom protocols; they are **private by default** and can be exposed publicly via the expose endpoint (see workflow 9, and https://docs.miget.com/networking/ports for the full list of supported ports).
+- Apps can be **public or private** (`private_access`): a private app has no public ingress and is reachable only inside the workspace network. Settable on create/update (default `false`); returned in the app response.
 
 ### Projects
 
@@ -234,6 +236,15 @@ A **Bucket** is an S3-compatible object storage container.
 - Service types: `postgres`, `shared_storage`
 - Services can be mounted to apps as addons
 - Services have their own lifecycle independent of any app
+
+### Stacks (Docker Compose)
+
+A **Stack** deploys a multi-service application from a single `docker-compose.yml` in a Git repository.
+
+- A stack is pinned to a **Resource** (Miget) and belongs to a **Project**
+- Miget detects the compose services and provisions the underlying **apps** and **managed services** for you
+- The stack tracks a Git **branch**; each deploy re-reads the compose file and reconciles changes
+- Stack `state` and per-service status are computed from the underlying apps/services
 
 ---
 
@@ -330,6 +341,7 @@ POST /api/v1/apps
 # Step 4: Deploy the application
 POST /api/v1/apps/{app-uuid}/deploy
 {
+  "custom_tag": "v1.2.3",  # Optional: deploy a specific image tag
   "commit_sha": "abc123",  # Optional: deploy specific commit
   "branch": "main"         # Optional: deploy specific branch
 }
@@ -409,14 +421,18 @@ POST /api/v1/apps/{app-uuid}/vars
   "value": "postgresql://..."
 }
 
-# Update variable
-PUT /api/v1/apps/{app-uuid}/vars/{var-uuid}
+# Update variable (identified by key)
+PUT /api/v1/apps/{app-uuid}/vars
 {
+  "key": "DATABASE_URL",
   "value": "new-value"
 }
 
-# Delete variable
-DELETE /api/v1/apps/{app-uuid}/vars/{var-uuid}
+# Delete variable (identified by key)
+DELETE /api/v1/apps/{app-uuid}/vars
+{
+  "key": "DATABASE_URL"
+}
 ```
 
 ### 4. Add a Database Addon
@@ -640,6 +656,36 @@ PUT /api/v1/apps/{app-uuid}/deployment
 # kamal deploy (from the user's local machine, not via API)
 ```
 
+### 11. Create a Compose Stack (Docker Compose)
+
+```http
+# Step 1: Analyze the repo to discover services and required env vars (creates nothing)
+POST /api/v1/stacks/analyze
+{
+  "repository_url": "https://github.com/acme/shop.git",
+  "branch": "main",
+  "compose_path": "."
+}
+# Response: { "manifest": { "apps": [...], "managed_services": [...] }, "warnings": [] }
+# Inspect each service's env_vars for entries with "required": true and a blank "value",
+# then ask the user whether to supply them or auto-populate (good for secrets).
+
+# Step 2: Create the stack, supplying required env vars
+POST /api/v1/stacks
+{
+  "repository_url": "https://github.com/acme/shop.git",
+  "branch": "main",
+  "resource_id": "{miget-uuid}",
+  "project_id": "{project-uuid}",
+  "label": "Shop",
+  "env_var_overrides": { "web": { "STRIPE_API_KEY": "sk_live_..." } },
+  "auto_populate_required_vars": true
+}
+
+# Step 3: Watch deployment progress
+GET /api/v1/stacks/{stack-uuid}/deployments
+```
+
 ---
 
 ## Key Endpoints
@@ -653,7 +699,7 @@ PUT /api/v1/apps/{app-uuid}/deployment
 
 - `GET /api/v1/apps` - List all applications
 - `POST /api/v1/apps` - Create new application
-- `GET /api/v1/apps/{uuid}` - Get application details (includes `deployment_method` and `deployment_config` with method-specific fields; for Kamal apps this includes `registry_password`, `registry_hostname`, `registry_username`, `registry_image`, and `ssh_keys`; also includes a nested `region` object with `id`, `name`, and `code`)
+- `GET /api/v1/apps/{uuid}` - Get application details (includes `deployment_method` and `deployment_config` with method-specific fields; for Kamal apps this includes `registry_password`, `registry_hostname`, `registry_username`, `registry_image`, and `ssh_keys`; also includes a nested `region` object with `id`, `name`, and `code`, plus a `private_access` boolean)
 - `PUT /api/v1/apps/{uuid}` - Update application
 - `DELETE /api/v1/apps/{uuid}` - Delete application
 - `PUT /api/v1/apps/{uuid}/security` - Update security settings (network connectivity, Basic Authentication)
@@ -665,6 +711,7 @@ PUT /api/v1/apps/{app-uuid}/deployment
 - `PUT /api/v1/apps/{uuid}/scaling_profile` - Update scaling profile (replicas, auto-scaling, thresholds). Not available on free plan.
 - `GET /api/v1/apps/{uuid}/deployments` - List deployments
 - `GET /api/v1/apps/{uuid}/deployments/{id}/logs` - Get build logs
+- `GET /api/v1/apps/{uuid}/activity` - Get paginated activity feed (deployments, config changes, audit events). Query params: `page`, `limit`. Returns an envelope `{ "activities": [{ action, description, resource, actor, timestamp, source }], "pagination": { page, limit, total } }`.
 
 ### Resources
 
@@ -704,8 +751,8 @@ PUT /api/v1/apps/{app-uuid}/deployment
 
 - `GET /api/v1/apps/{uuid}/vars` - List app variables
 - `POST /api/v1/apps/{uuid}/vars` - Create variable
-- `PUT /api/v1/apps/{uuid}/vars/{var_uuid}` - Update variable
-- `DELETE /api/v1/apps/{uuid}/vars/{var_uuid}` - Delete variable
+- `PUT /api/v1/apps/{uuid}/vars` - Update variable (identified by `key` in body)
+- `DELETE /api/v1/apps/{uuid}/vars` - Delete variable (identified by `key` in body)
 
 ### App Addons
 
@@ -788,6 +835,21 @@ PUT /api/v1/apps/{app-uuid}/deployment
 - `POST /api/v1/services/{id}/restore_backup` - Restore service from backup (PostgreSQL primary only, not available for replicas)
 - `POST /api/v1/services/{id}/reset_database` - Reset service database (PostgreSQL primary only, not available for replicas)
 
+### Stacks (Docker Compose)
+
+Stacks reuse `apps:*` permissions (read = `apps:view`, create/delete = `apps:manage`, deploy/config = `apps:deploy`/`operate`/`manage`).
+
+- `GET /api/v1/stacks` - List all stacks
+- `POST /api/v1/stacks/analyze` - Detect compose services and required env vars from a repo (creates nothing; call before creating)
+- `POST /api/v1/stacks` - Create a stack (analyzes the repo server-side, then provisions the apps/services)
+- `GET /api/v1/stacks/{uuid}` - Get stack details (computed `state`, `services`, `latest_deployment`, `deployment_config`)
+- `PUT /api/v1/stacks/{uuid}` - Update a stack (`label`, `compose_path`)
+- `DELETE /api/v1/stacks/{uuid}` - Delete a stack (cascades to its apps and services)
+- `POST /api/v1/stacks/{uuid}/deploy` - Trigger a redeploy (optional: `commit_sha`)
+- `PUT /api/v1/stacks/{uuid}/deployment` - Update the GitHub deployment config (`branch`, `auto_deploy_enabled`, `repository`)
+- `GET /api/v1/stacks/{uuid}/deployments` - List deployment history
+- `GET /api/v1/stacks/{uuid}/deployments/{id}` - Get a single deployment (`{id}` is the deployment UUID)
+
 ### Plans, Regions & Components
 
 - `GET /api/v1/plans` - List available plans (plan types: `dev`, `pro`)
@@ -805,6 +867,23 @@ PUT /api/v1/apps/{app-uuid}/deployment
 - `POST /api/v1/users/me/ssh_keys` - Add an SSH key
 - `GET /api/v1/users/me/ssh_keys/{id}` - Get SSH key details
 - `DELETE /api/v1/users/me/ssh_keys/{id}` - Remove an SSH key
+
+### Container Registry Credentials
+
+Workspace-level credentials for pulling images from private registries. The returned `uuid` is what you pass as `deployment_config.credential_id` for `container_registry` (and `github`/`public_git`) deployments. The `token` is encrypted at rest and **never returned** by the API.
+
+- `GET /api/v1/container_registry_credentials` - List credentials
+- `POST /api/v1/container_registry_credentials` - Create a credential
+- `GET /api/v1/container_registry_credentials/{uuid}` - Get credential details
+- `PUT /api/v1/container_registry_credentials/{uuid}` - Update a credential (rotate token, change registry/username)
+- `DELETE /api/v1/container_registry_credentials/{uuid}` - Delete a credential
+
+### Git Credentials
+
+Workspace-level Git credentials (GitHub App installs / personal access tokens) used to clone private repositories. The returned `uuid` is what you pass as `credential_id` when creating a **stack** (`POST /api/v1/stacks`) or a `github`/`public_git` **app**. Read-only over the API; the access token is encrypted at rest and **never returned**. (Creating a GitHub App credential is a browser-based install flow, done in the dashboard.)
+
+- `GET /api/v1/git_credentials` - List git credentials (returns `uuid`, `name`, `provider`, `installation_id`)
+- `GET /api/v1/git_credentials/{uuid}` - Get credential details
 
 ---
 
@@ -853,6 +932,7 @@ When creating resources, ask the user for all required fields before making the 
 - `deployment_method` (string) - `"git_push"`, `"public_git"`, `"github"`, `"container_registry"`, `"parent_image"`, or `"kamal"`. Note: the enum value is `container_registry` (not `docker_registry`).
 - `deployment_config` (object) - Configuration specific to the chosen deployment method (see table below)
 - `app_vars_attributes` (array) - Environment variables to set at creation (array of `{key, value}` objects)
+- `private_access` (boolean) - Restrict the app to private access only — no public ingress, reachable only inside the workspace network (default `false`). Also accepted on `PUT /api/v1/apps/{uuid}`.
 
 #### Deployment Configuration by Method
 
@@ -914,7 +994,7 @@ Each `deployment_method` requires different fields in `deployment_config`:
   "deployment_method": "public_git",
   "deployment_config": {
     "credential_id": "{git-credential-uuid}",
-    "repository": "https://github.com/user/repo.git",
+    "repository_url": "https://github.com/user/repo.git",
     "branch": "main",
     "dockerfile_path": "./Dockerfile",
     "build_context": "."
@@ -924,11 +1004,16 @@ Each `deployment_method` requires different fields in `deployment_config`:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `repository` | string | Yes | - | Full Git repository URL |
+| `repository_url` | string | Yes | - | Full HTTPS Git repository URL (note: `public_git` uses `repository_url`, whereas `github` uses `repository`) |
 | `branch` | string | No | `"main"` | Branch to deploy from |
 | `credential_id` | string | No | - | UUID of Git credentials (for private repos) |
 | `dockerfile_path` | string | No | `"./Dockerfile"` | Path to Dockerfile |
 | `build_context` | string | No | `"."` | Docker build context directory |
+
+**Validate the URL before you send it.** The platform enforces the format below and rejects a malformed or unreachable repo at creation — check it yourself first so you can correct the user instead of surfacing a 422:
+- Must be an **HTTPS** URL shaped `https://<host>/<owner>/<repo>` (the trailing `.git` is optional — it is normalized server-side). Examples: `https://github.com/rails/rails`, `https://gitlab.com/group/project.git`.
+- **Rejected:** SSH URLs (`git@github.com:owner/repo.git`), plain `http://`, a host with a port, and extra path depth such as GitLab subgroups (`host/group/subgroup/repo`) — the check expects exactly host + owner + repo. If the user gives an SSH or browser URL, convert it to the `https://<host>/<owner>/<repo>` form before sending.
+- The repo **and** the `branch` must be publicly reachable: on create the platform verifies the repository is accessible and the branch exists. A private repository without a `credential_id`, or a non-existent branch, fails validation. For a private repo, pass a `credential_id` (see Git Credentials).
 
 **`github`** - Deploy from a GitHub repository using the Miget GitHub App integration.
 
@@ -974,11 +1059,17 @@ Each `deployment_method` requires different fields in `deployment_config`:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `image_url` | string | Yes | - | Full container image URL (e.g., `docker.io/library/nginx`) |
-| `tag` | string | No | `"latest"` | Container image tag |
+| `image_url` | string | Yes | - | Container image reference **without scheme and without tag** (e.g., `docker.io/library/nginx`) |
+| `tag` | string | No | `"latest"` | Container image tag (separate field — do not append it to `image_url`) |
 | `credential_id` | string | No | - | UUID of container registry credentials (for private registries) |
 | `command` | array of strings | No | - | Override the image's `ENTRYPOINT` (Kubernetes `container.command`). Leave unset to use the image default. |
 | `args` | array of strings | No | - | Override the image's `CMD` (Kubernetes `container.args`). Leave unset to use the image default. Use this when an image's ENTRYPOINT is set but no CMD is supplied (e.g. Keycloak prints help on bare run; pass `["start"]` to start the server). |
+
+**Validate the image reference before you send it.** The platform enforces the format below and rejects a malformed reference at creation — check it yourself first:
+- Provide `image_url` **without a scheme and without a tag**. Format: `[registry-host[:port]/]namespace/name`, with at least one `/`. Examples: `docker.io/library/nginx`, `ghcr.io/org/app`, `registry.example.com:5000/team/app`.
+- **Rejected:** a bare name with no namespace (`nginx` → use `library/nginx`), anything containing `://`, and an image with the tag embedded.
+- **Split off the tag.** If the user gives `ghcr.io/org/app:1.2`, send `image_url: "ghcr.io/org/app"` and `tag: "1.2"`. If no tag is given, it defaults to `latest`.
+- **Private images** require a matching `credential_id` (a container registry credential — see Container Registry Credentials). Public images (e.g. Docker Hub official images) need none.
 
 **`parent_image`** - Inherit the container image from another app on the platform. When the parent app deploys, this app can auto-sync.
 
@@ -1038,6 +1129,35 @@ Optional but recommended:
 
 Please provide these details so I can create the application."
 ```
+
+---
+
+### Create Stack (`POST /api/v1/stacks`)
+
+A stack deploys a multi-service app from a `docker-compose.yml` in a Git repository. The compose source is analyzed server-side, so **call `POST /api/v1/stacks/analyze` first** to discover the services and which environment variables are required.
+
+**Required fields:**
+- `repository_url` (string) - Git repository URL (GitHub or public HTTPS Git)
+- `branch` (string) - Git branch to deploy
+- `resource_id` (string) - UUID of the compute resource (Miget) to deploy onto
+- One of `project_id` (string, existing project UUID) **or** `new_project_name` (string, creates a new project)
+
+**Optional:**
+- `compose_path` (string) - Path to the compose file in the repo (default `"."`)
+- `credential_id` (string) - UUID of a stored Git credential (for private repositories)
+- `label` (string) - Display name; `name` (string) - codename seed (derived from the repo if omitted)
+- `new_project_description` (string) - description when creating a new project
+- `env_var_overrides` (object) - Values for required env vars, shaped `{ "<service>": { "<KEY>": "<value>" } }`
+- `auto_populate_required_vars` (boolean) - Random-fill any required env var left without a custom value (default `false`)
+
+**Discover-then-supply flow (handling env vars):**
+1. `POST /api/v1/stacks/analyze` with `{repository_url, branch, compose_path?}`. Each app/standalone service in the returned `manifest` has `env_vars: [{ key, value, required }]`.
+2. Required vars are those with `required: true` and a blank `value`. Ask the user whether each should be a **custom** value or **auto-populated** (good for secrets).
+3. `POST /api/v1/stacks` with custom values in `env_var_overrides` and/or `auto_populate_required_vars: true`. Managed services (databases/caches) are auto-configured — never supply env vars for them.
+
+**Error responses to handle:**
+- `422 { "error": "Missing required environment variables: web.SECRET, ..." }` - a required var was neither supplied nor auto-populated; go back to step 2.
+- `422 { "error": "Not enough capacity on the resource: ..." }` - the manifest needs more RAM/disk than the resource has; pick a larger `resource_id`.
 
 ---
 
@@ -1168,9 +1288,9 @@ A service is a standalone resource (e.g., database, shared storage) that can be 
 *   **Required:**
     *   `service_type` (string): The type of service. Must be one of `postgres`, `shared_storage`.
     *   `project_id` (string): The UUID of the project this service will belong to.
-    *   `resource_id` (string): The UUID of the compute resource where the service will be provisioned. (Legacy alias: `miget_id` — deprecated, still accepted for backward compatibility.)
     *   `label` (string): A human-readable display name for the service.
 *   **Optional:**
+    *   `resource_id` (string): UUID of the compute resource to provision the service on. Optional at the API level, but a service needs a resource to run on — supply this (or the legacy alias `miget_id`, deprecated) in practice.
     *   `ram_size` (float): RAM allocation in MiB.
     *   `disk_size` (float): Disk storage in GiB.
     *   `cpu_size` (float): CPU allocation in cores.
@@ -1231,9 +1351,9 @@ A standalone shared storage volume service.
 
 **Required fields:**
 - `label` (string) - Human-readable display name for the bucket
-- `resource_id` (string) - UUID of the compute resource to attach the bucket to (get from `GET /api/v1/resources`). Legacy alias `miget_id` is still accepted but deprecated.
 
 **Optional but important:**
+- `resource_id` (string) - UUID of the compute resource to attach the bucket to (get from `GET /api/v1/resources`). Optional at the API level, but a bucket needs a resource — supply this (or the legacy alias `miget_id`, deprecated) in practice.
 - `visibility` (string) - Bucket visibility: `"public_access"` or `"private_access"` (default: `"private_access"`)
 - `disk_size` (float) - Disk allocation in GiB (default: 0.1)
 
@@ -1505,6 +1625,8 @@ What would you like to set up?"
 - `cron` (string) - Cron expression (e.g., `"0 * * * *"` for hourly, for cron type)
 - `command` (string) - Shell command to execute
 - `daily_time` (string) - Execution time for daily jobs in HH:MM format (24-hour)
+- `minute` (string) - Minute component for scheduling (0-59)
+- `hour` (string) - Hour component for scheduling (0-23)
 
 **Example questions to ask:**
 - "What should be the cronjob name?"
@@ -1534,6 +1656,27 @@ What would you like to set up?"
 - "What internal port number? (1-65535)"
 - "What protocol? (tcp or udp)"
 - "Should this port be publicly accessible? (true/false)"
+
+### Create Container Registry Credential (`POST /api/v1/container_registry_credentials`)
+
+Stores credentials for pulling images from a private registry. The returned `uuid` is passed as `deployment_config.credential_id` when creating an app with `deployment_method: container_registry` (and is also usable for `github`/`public_git` private repositories). The `token` is encrypted at rest and never returned.
+
+**Required fields:**
+- `name` (string) - Display name (must be unique within the workspace)
+- `registry` (string) - Provider: `docker_hub`, `github`, `gitlab`, `aws_ecr`, `azure`, `digitalocean`, `quay`, or `generic`
+- `username` (string) - Registry username
+- `token` (string) - Registry password or access token
+
+**Optional:**
+- `registry_hostname` (string) - Registry hostname URL (required for `generic`, `aws_ecr`, and `azure`; optional otherwise)
+- `skip_validation` (boolean) - Skip live credential validation (non-production environments only)
+
+**Response fields:** `uuid`, `name`, `registry`, `username`, `registry_hostname`, `created_at`, `updated_at` (the `token` is never returned).
+
+**Example questions to ask:**
+- "Which registry provider? (docker_hub, github, gitlab, aws_ecr, azure, digitalocean, quay, generic)"
+- "What's the registry username and access token/password?"
+- "For generic/aws_ecr/azure registries: what's the registry hostname?"
 
 ### Rollback Deployment (`POST /api/v1/apps/{uuid}/deployments/{id}/rollback`)
 
