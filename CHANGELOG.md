@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.7 — 2026-07-05
+
+Add Compose Stacks and Git Credentials, plus source-link validation and var-path fixes.
+
+- **Docker Compose Stacks:** documented the full `/api/v1/stacks` surface — analyze, create, list/get, update, deploy, deployment config, deployment history, and delete — plus the analyze-then-create workflow and required env-var resolution
+- **Git Credentials:** added the read-only `GET /api/v1/git_credentials` (list/get); the returned `uuid` is the `credential_id` for stacks and `github`/`public_git` apps
+- **Container Registry Credentials:** added the workspace-scoped credentials endpoints and creation fields
+- Fixed the `public_git` deployment config field: it is `repository_url` (a full HTTPS URL), not `repository`. `repository` remains the `github` field (`owner/repo` format)
+- Added URL validation guidance for `public_git` (HTTPS-only `https://host/owner/repo`, no SSH/`http://`/ports/nested paths, repo + branch must be reachable) and for the container `image_url` (no scheme, no embedded tag — put the tag in the separate `tag` field)
+- Corrected the app/project variable endpoint paths (flat `/vars` routes; removed the non-existent `/vars/{var-uuid}` segments)
+- Documented the app `private_access` field and PostgreSQL read-replica / promote endpoints
+
+---
+
 ## 0.1.6 — 2026-05-25
 
 Fix ports API endpoint URLs — remove broken `workspace/app-name` path segments.
@@ -20,8 +34,6 @@ Document `resource_id` params, domain verification, and app state endpoint.
 ---
 
 ## 0.1.4 — 2026-05-07
-
-Sync miget-api SKILL.md from migetapp.
 
 - Dropped `region_id` from app creation examples (`resource_id` is now required)
 - Documented `command` and `args` overrides for container deployments
