@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.8 — 2026-07-07
+
+Add guidance for deploying catalogue stacks and authoring `compose.miget.yaml`.
+
+- **Catalogue stacks:** deploy well-known self-hostable apps (WordPress, Ghost, n8n, …) from the curated deployable.sh catalogue (`deployable-sh/stacks`) instead of an arbitrary compose file found on the web — point `repository_url` at the catalogue repo and set `compose_path` to the stack directory
+- **`compose.miget.yaml`:** documented the `x-miget` overlay for tuning a stack on Miget — per-service `ram`/`cpu`/`private`, managed Postgres/Valkey add-ons with `storage`, volume `size`/`type`, and the port-5000 public-entry convention — and how to author one when a repo has only a base compose file
+
+---
+
 ## 0.1.7 — 2026-07-05
 
 Add Compose Stacks and Git Credentials, plus source-link validation and var-path fixes.
