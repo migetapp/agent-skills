@@ -686,6 +686,85 @@ POST /api/v1/stacks
 GET /api/v1/stacks/{stack-uuid}/deployments
 ```
 
+### 11a. Deploy a Known App from the Miget Catalogue (deployable.sh)
+
+Miget curates ready-to-run, platform-tuned Compose stacks — WordPress, Ghost, n8n, Kafka,
+Supabase, Metabase, and many more — in the public **deployable.sh** catalogue (repo
+`deployable-sh/stacks`). Each stack directory ships a `compose.miget.yaml` carrying the
+platform overrides a raw compose file lacks (port 5000 ingress, `private: true` defaults,
+RAM sizing, managed-service wiring), so these deploy correctly out of the box.
+
+**When the user asks to run a well-known self-hostable app (e.g. "deploy WordPress", "spin up
+Ghost"), prefer the catalogue over an arbitrary compose file found on the web** — a random
+`docker-compose.yml` from the internet almost never has Miget's overrides and will likely fail
+to deploy.
+
+1. **Find it in the catalogue.** Look the app up in `deployable-sh/stacks`: list the repo's
+   top-level directories (or browse https://deployable.sh) and match the app to a directory. The
+   slug is the app's lowercased name (e.g. `wordpress`, `ghost`, `n8n`). Do **not** search the
+   internet for a compose file when the app exists here.
+2. **Deploy it** as a normal Compose Stack (section 11), pointing `repository_url` at the
+   catalogue repo and `compose_path` at the stack directory:
+
+```http
+POST /api/v1/stacks/analyze
+{
+  "repository_url": "https://github.com/deployable-sh/stacks.git",
+  "branch": "main",
+  "compose_path": "wordpress"
+}
+# Then POST /api/v1/stacks with the same source plus any required env vars (Step 2 above).
+```
+
+**If the app is not in the catalogue**, don't grab a random compose file off the web — ask the
+user for a repository (public Git or GitHub) instead.
+
+### 11b. Repos with a compose file but no `compose.miget.yaml`
+
+When deploying a user's **own** repository whose base `docker-compose.yml` has no
+`compose.miget.yaml` beside it, the stack still deploys, but without Miget's per-service tuning —
+services fall back to default sizing and exposure. **Offer to create a `compose.miget.yaml`
+overlay** (a sibling of the compose file) and, once the user confirms, generate it and add it to
+their repo. Miget merges it onto the base compose at detect/deploy time; it carries only
+`x-miget` overrides:
+
+```yaml
+# compose.miget.yaml — Miget overlay, merged onto your docker-compose at deploy time
+services:
+  web:                 # the public HTTP entry — must listen on port 5000 (Miget's only ingress port)
+    x-miget:
+      ram: "1024"      # memory: plain MB, or a unit like "1Gi"
+  worker:
+    x-miget:
+      ram: "512"
+      private: true    # internal only, not publicly exposed
+  db:                  # a database/cache -> provision as a managed add-on, not a raw container
+    x-miget:
+      managed: postgres  # supported: postgres, valkey
+      cpu: "500m"
+      ram: "1Gi"
+      storage: "5Gi"
+  cache:
+    x-miget:
+      managed: valkey
+      ram: "256Mi"
+volumes:
+  webdata:
+    x-miget: { size: "5000", type: RWO }   # disk: MB or a unit; RWO (default) or RWX (shared)
+```
+
+Rules when generating it:
+- Give every service an `x-miget.ram` (plain MB or a unit like `1Gi`); add `cpu` (e.g. `500m`) when known.
+- Exactly one service is the public HTTP entry and must listen on **port 5000**; mark every other
+  service `x-miget: { private: true }`.
+- For databases/caches, use `x-miget.managed: <postgres|valkey>` (with `storage`) so Miget runs them
+  as managed add-ons and injects their connection variables — don't run them as raw containers.
+- Give every named volume an `x-miget: { size: "<MB or unit>", type: RWO }` (`RWX` only when the
+  volume is shared across replicas).
+
+Re-run `POST /api/v1/stacks/analyze` after adding the file to confirm the detected services and
+sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs.
+
 ---
 
 ## Key Endpoints
