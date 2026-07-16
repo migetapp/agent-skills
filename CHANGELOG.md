@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.9 — 2026-07-16
+
+Correct the `within_resources` scaling field: it is accepted but no longer does anything.
+
+- **`within_resources`:** `PUT /api/v1/apps/{uuid}/scaling_profile` still accepts the field, but it is now ignored — scaling is always limited to the resource's allocation. Scaling beyond the resource is not implemented
+
+---
+
 ## 0.1.8 — 2026-07-07
 
 Add guidance for deploying catalogue stacks and authoring `compose.miget.yaml`.
