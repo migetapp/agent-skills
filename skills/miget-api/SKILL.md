@@ -1963,7 +1963,7 @@ Configures auto-scaling. Not available on free plan.
 - `period_enabled` (boolean) - Enable time-based scaling windows
 - `scaling_start_time` (string) - Start time for scaling window (HH:MM, 24-hour)
 - `scaling_end_time` (string) - End time for scaling window (HH:MM, 24-hour)
-- `within_resources` (boolean) - Limit scaling to available resource allocation
+- `within_resources` (boolean) - Not implemented yet: scaling is always limited to the resource's allocation. Accepted but ignored.
 
 ### Change Application State (`PATCH /api/v1/apps/{uuid}/state`)
 
