@@ -213,6 +213,7 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - Apps have an **internal URL** for app-to-app and addon connections inside the workspace network, returned as `internal_url` on the app response in the form `<service_name>.<resource-name>.<region-code>.migetapp.internal:5000` (null until a compute Resource is assigned). Traffic from other Miget apps requires `allow_connections: true` (default `false`, set via `PUT /apps/{uuid}/security`); once enabled, the app is reachable at its `internal_url`.
 - Resource limits are reported under `quota` on the app response: `quota.ram_size` is in **bytes** (e.g. `134217728` = 128 MiB) and `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields.
 - The app response also returns `basic_auth_enabled` (whether HTTP Basic Auth is enforced at the ingress). Basic Auth credentials are **never** returned by the API.
+- Every app automatically gets **monitoring** — Grafana dashboards, metrics, and logs, with Prometheus/Loki-compatible query APIs at `metrics.miget.com`. Runtime metrics and app logs are **not** on the REST API; see the Monitoring & Observability section.
 
 ### Projects
 
@@ -2025,6 +2026,52 @@ Creates a storage addon on the app linked to this service.
 
 ---
 
+## Monitoring & Observability
+
+Every app on Miget automatically gets metrics, logs, and pre-built Grafana dashboards — no setup. For **any** observability question (resource usage, request rates, restarts, errors, why a pod or cron run misbehaved), look here and in the Miget monitoring docs first: the REST API deliberately does **not** expose runtime metrics or app logs.
+
+**Docs:** https://docs.miget.com/monitoring/overview · `/metrics` · `/metrics-api` · `/logs`
+
+### In Grafana (UI)
+
+Click **Monitoring** on an app's dashboard to open Grafana (automatic login — no credentials). Three pre-built dashboards ship with every app: **App Overview**, **Pod Details**, and **Logs**; custom dashboards can be built in Grafana.
+
+### Metrics API (Prometheus-compatible)
+
+Base URL `https://metrics.miget.com`. Auth: `Authorization: Bearer <miget_live_token>`; scope with the `X-Workspace-Id: <workspace-uuid>` header. Query language: **PromQL**. Subject to fair-use rate limits (`429` on throttle).
+
+- Instant query: `GET /prometheus/api/v1/query?query=<PromQL>[&time=<ts>]`
+- Range query: `GET /prometheus/api/v1/query_range?query=<PromQL>&start=<ts>&end=<ts>&step=<e.g. 60s>`
+- Label discovery: `GET /prometheus/api/v1/labels` · `GET /prometheus/api/v1/label/{name}/values`
+
+Metrics are prefixed `miget_` and carry common labels `namespace`, `app`, `addon`, `addon_type`, `instance` (HTTP metrics add `status`/`method`; disk adds `device`). Common series:
+- **App:** `miget_app_replicas_desired`, `miget_app_replicas_available`, `miget_app_http_responses_total`, `miget_app_http_response_time_seconds_bucket`
+- **Instance (pod):** `miget_instance_cpu_usage`, `miget_instance_memory_used_bytes`, `miget_instance_net_recv_bytes_total`, `miget_instance_disk_read_bytes_total`, `miget_instance_status_phase`, `miget_instance_restarts_total`
+- **Volume:** `miget_volume_used_bytes`, `miget_volume_size_bytes`, `miget_volume_iops_limit`
+- **Addon (PostgreSQL):** connections, database size, replication lag
+
+Example — last hour of CPU for an app:
+`GET https://metrics.miget.com/prometheus/api/v1/query_range?query=miget_instance_cpu_usage{app="my-app"}&start=<ts>&end=<ts>&step=60s`
+
+### Logs API (Loki-compatible)
+
+Same host and auth as the Metrics API. Query language: **LogQL**.
+- `GET https://metrics.miget.com/loki/api/v1/query_range?query={app="my-app"}&limit=100`
+- Narrow to a specific cron run by pod: `{app="my-app", pod="<last_job_name>"}`.
+
+See https://docs.miget.com/monitoring/logs#logs-via-api.
+
+### Retention (by plan)
+
+| Plan | Metrics | Logs |
+|---|---|---|
+| Free | 30 days | 3 days |
+| Pay as you grow | 13 months | 7 days |
+
+Short-lived cron pods may fall between metric scrapes, so their `miget_instance_*` series can be sparse or absent; their **logs** are still queryable via the Logs API (and the cron `stream_logs` endpoint) while retained.
+
+---
+
 ## Best Practices
 
 1. **Use API Tokens for Automation**
@@ -2059,10 +2106,9 @@ Creates a storage addon on the app linked to this service.
      - If the user is hitting a custom TCP/UDP port directly: list ports via `GET /api/v1/apps/{uuid}/ports` and confirm the port exists and is public. Extra ports are **private by default** — expose them with `expose_publicly`.
    - Only after ports look right, check deployment status, domains, and logs.
 
-7. **Fetching logs**
-   - **Build/deploy logs:** `GET /api/v1/apps/{uuid}/deployments/{id}/logs` (stored text, after completion) and `/stream_logs` (SSE, while running).
-   - **Cron run logs:** `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` (SSE, most recent run).
-   - **App runtime logs & history:** the REST API does not serve app runtime logs. Query them from the Loki logs API: `GET https://metrics.miget.com/loki/api/v1/query_range` with `Authorization: Bearer $TOKEN` and a LogQL query such as `{app="<app-name>"}`. Retention is 3 days (Free) / 7 days (paid). See https://docs.miget.com/monitoring/logs#logs-via-api.
+7. **Observability — metrics, logs, dashboards**
+   - For resource usage, request rates, restarts, errors, or any runtime "what's happening" question, use the **Monitoring & Observability** section above (Grafana dashboards + Prometheus/Loki query APIs at `metrics.miget.com`) and https://docs.miget.com/monitoring/overview.
+   - The REST API only serves **build/deploy** logs (`GET /api/v1/apps/{uuid}/deployments/{id}/logs`, `/stream_logs`) and **cron run** logs (`GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs`). App **runtime** logs and all metrics live in the monitoring APIs, not the REST API.
 
 8. **In-container HTTP tooling**
    - The default build image is minimal and may not include `curl`/`wget`. For outbound HTTP from your app or a cron command, prefer your language's native HTTP client, or install the tool in your Dockerfile.

@@ -2,13 +2,14 @@
 
 ## 0.1.10 — 2026-07-21
 
-Document new app, deployment, and cron-job response fields, the deploy-in-progress conflict, and how to read runtime logs.
+Document new app, deployment, and cron-job response fields, the deploy-in-progress conflict, and Grafana monitoring (metrics & logs APIs).
 
 - **App internal URL & auth state:** `GET /api/v1/apps/{uuid}` now returns `internal_url` (the `<service>.<resource>.<region>.migetapp.internal:5000` address for app-to-app and addon connections, null until a compute resource is assigned) and `basic_auth_enabled` (whether HTTP Basic Auth is enforced at the ingress — credentials are never returned)
 - **Deployment commit metadata:** `GET /api/v1/apps/{uuid}/deployments` records now include `commit_sha`, `commit_message`, and `branch` for git-based deployment methods (null otherwise), so you can confirm which commit is live
 - **Cron run logs:** documented `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` (SSE) for streaming the most recent run's logs
 - **Deploy while busy:** `POST /api/v1/apps/{uuid}/deploy` now returns `409 Conflict` when a deployment is already in progress — poll `GET /api/v1/apps/{uuid}/deployments` and retry once it settles
 - **Cron reschedule, resource units, and runtime logs:** clarified that a cron job's schedule cannot be changed via `PUT` (delete and recreate to reschedule), that `quota.ram_size` is reported in bytes, and that app runtime logs are queried from the Loki logs API (`https://metrics.miget.com/loki/api/v1/query_range`) rather than the REST API
+- **Monitoring & Observability:** added a section covering the Grafana dashboards every app ships with and the Prometheus-compatible Metrics API and Loki Logs API at `https://metrics.miget.com` (PromQL/LogQL, auth, common `miget_*` series, retention) — where agents should look for resource usage, request rates, restarts, errors, and runtime logs
 
 ---
 
