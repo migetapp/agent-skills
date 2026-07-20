@@ -210,6 +210,9 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - Apps can have **environment variables** (vars)
 - Apps can have **ports** (exposed ports). Port `5000` is fixed: HTTP traffic on the app's `*.migetapp.com` URL is always served from port `5000` — the app must listen on `5000`, and this port cannot be removed or changed. Additional TCP/UDP ports can be added for custom protocols; they are **private by default** and can be exposed publicly via the expose endpoint (see workflow 9, and https://docs.miget.com/networking/ports for the full list of supported ports).
 - Apps can be **public or private** (`private_access`): a private app has no public ingress and is reachable only inside the workspace network. Settable on create/update (default `false`); returned in the app response.
+- Apps have an **internal URL** for app-to-app and addon connections inside the workspace network, returned as `internal_url` on the app response in the form `<service_name>.<resource-name>.<region-code>.migetapp.internal:5000` (null until a compute Resource is assigned). Traffic from other Miget apps requires `allow_connections: true` (default `false`, set via `PUT /apps/{uuid}/security`); once enabled, the app is reachable at its `internal_url`.
+- Resource limits are reported under `quota` on the app response: `quota.ram_size` is in **bytes** (e.g. `134217728` = 128 MiB) and `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields.
+- The app response also returns `basic_auth_enabled` (whether HTTP Basic Auth is enforced at the ingress). Basic Auth credentials are **never** returned by the API.
 
 ### Projects
 
@@ -785,7 +788,7 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `PATCH /api/v1/apps/{uuid}/state` - Change app state (schedule_start/schedule_stop/schedule_restart)
 - `POST /api/v1/apps/{uuid}/clone` - Clone an application (copy env vars, secret files, scaling, health checks, addons, cronjobs)
 - `PUT /api/v1/apps/{uuid}/deployment` - Update deployment method and configuration (switch methods, update Kamal SSH keys)
-- `POST /api/v1/apps/{uuid}/deploy` - Trigger deployment (optional: custom_tag, commit_sha, branch). Not used for Kamal apps.
+- `POST /api/v1/apps/{uuid}/deploy` - Trigger deployment (optional: custom_tag, commit_sha, branch). Not used for Kamal apps. Returns `409 Conflict` if a deployment is already in progress — poll `GET /apps/{uuid}/deployments` and retry once it settles.
 - `PUT /api/v1/apps/{uuid}/health_checks` - Update health check probes (liveness, readiness, startup)
 - `PUT /api/v1/apps/{uuid}/scaling_profile` - Update scaling profile (replicas, auto-scaling, thresholds). Not available on free plan.
 - `GET /api/v1/apps/{uuid}/deployments` - List deployments
@@ -854,12 +857,13 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `GET /api/v1/apps/{uuid}/cronjobs` - List cronjobs
 - `POST /api/v1/apps/{uuid}/cronjobs` - Create cronjob
 - `GET /api/v1/apps/{uuid}/cronjobs/{id}` - Get cronjob details
-- `PUT /api/v1/apps/{uuid}/cronjobs/{id}` - Update cronjob
+- `PUT /api/v1/apps/{uuid}/cronjobs/{id}` - Update cronjob (**only `label` and `command` are updatable**; the schedule cannot be changed via PUT — DELETE and recreate the cronjob to reschedule)
 - `DELETE /api/v1/apps/{uuid}/cronjobs/{id}` - Delete cronjob
+- `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` - Stream the most recent run's logs in real-time (SSE, text/event-stream; returns 404 until the job has run at least once)
 
 ### App Deployments
 
-- `GET /api/v1/apps/{uuid}/deployments` - List deployments (optional filters: `status` (pending/running/completed/failed/cancelling/cancelled), `period` (7days/30days/90days/all))
+- `GET /api/v1/apps/{uuid}/deployments` - List deployments (optional filters: `status` (pending/running/completed/failed/cancelling/cancelled), `period` (7days/30days/90days/all)). Each record includes `commit_sha`, `commit_message`, and `branch` for git-based deployment methods (null otherwise).
 - `GET /api/v1/apps/{uuid}/deployments/{id}` - Get deployment details
 - `GET /api/v1/apps/{uuid}/deployments/{id}/logs` - Get build logs (text/plain, available after deployment completes)
 - `GET /api/v1/apps/{uuid}/deployments/{id}/stream_logs` - Stream logs in real-time (SSE, text/event-stream, for running deployments)
@@ -1707,6 +1711,10 @@ What would you like to set up?"
 - `minute` (string) - Minute component for scheduling (0-59)
 - `hour` (string) - Hour component for scheduling (0-23)
 
+**Important notes:**
+- Updating a cronjob (`PUT`) only changes `label` and `command`. The **schedule cannot be changed in place** — to reschedule, DELETE the cronjob and create a new one.
+- Per-run logs are available via `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` (SSE) once the job has run at least once.
+
 **Example questions to ask:**
 - "What should be the cronjob name?"
 - "What display label should I use?"
@@ -1897,6 +1905,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 **Constraints:**
 - Requires `apps:manage` permission
 - When `basic_auth_enabled` is true, both `basic_auth_username` and `basic_auth_password` are required (unless password already exists and you want to keep it)
+- The app response returns `basic_auth_enabled` so you can tell whether Basic Auth is enforced, but Basic Auth **credentials are never returned** by the API.
 
 **Example questions to ask:**
 - "Should I enable Basic Authentication? (true/false)"
@@ -2049,6 +2058,14 @@ Creates a storage addon on the app linked to this service.
      - If the user is hitting the default `*.migetapp.com` URL: the app must listen on port `5000` (HTTP is always served from `5000` and cannot be changed). If it's listening on a different port, tell the user to change the app to listen on `5000`.
      - If the user is hitting a custom TCP/UDP port directly: list ports via `GET /api/v1/apps/{uuid}/ports` and confirm the port exists and is public. Extra ports are **private by default** — expose them with `expose_publicly`.
    - Only after ports look right, check deployment status, domains, and logs.
+
+7. **Fetching logs**
+   - **Build/deploy logs:** `GET /api/v1/apps/{uuid}/deployments/{id}/logs` (stored text, after completion) and `/stream_logs` (SSE, while running).
+   - **Cron run logs:** `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` (SSE, most recent run).
+   - **App runtime logs & history:** the REST API does not serve app runtime logs. Query them from the Loki logs API: `GET https://metrics.miget.com/loki/api/v1/query_range` with `Authorization: Bearer $TOKEN` and a LogQL query such as `{app="<app-name>"}`. Retention is 3 days (Free) / 7 days (paid). See https://docs.miget.com/monitoring/logs#logs-via-api.
+
+8. **In-container HTTP tooling**
+   - The default build image is minimal and may not include `curl`/`wget`. For outbound HTTP from your app or a cron command, prefer your language's native HTTP client, or install the tool in your Dockerfile.
 
 ---
 
