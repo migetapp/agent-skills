@@ -2038,7 +2038,7 @@ Click **Monitoring** on an app's dashboard to open Grafana (automatic login — 
 
 ### Metrics API (Prometheus-compatible)
 
-Base URL `https://metrics.miget.com`. Auth: `Authorization: Bearer <miget_live_token>`; scope with the `X-Workspace-Id: <workspace-uuid>` header. Query language: **PromQL**. Subject to fair-use rate limits (`429` on throttle).
+Base URL `https://metrics.miget.com`. Auth: `Authorization: Bearer <miget_live_token>` — the **same Miget API token** you already use for the REST API (see Authentication); there is no separate Grafana credential. Scope with the `X-Workspace-Id: <workspace-uuid>` header. Query language: **PromQL**. Subject to fair-use rate limits (`429` on throttle).
 
 - Instant query: `GET /prometheus/api/v1/query?query=<PromQL>[&time=<ts>]`
 - Range query: `GET /prometheus/api/v1/query_range?query=<PromQL>&start=<ts>&end=<ts>&step=<e.g. 60s>`
