@@ -5,6 +5,8 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
+**Skill version:** `0.1.10` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+
 ## Overview
 
 Miget is a Kubernetes-based Platform-as-a-Service (PaaS) similar to Heroku or Render. It allows developers to deploy and manage applications, databases, and services in the cloud with minimal infrastructure management.
@@ -80,6 +82,27 @@ Miget API supports two authentication methods:
 ## Agent Behavioral Guidelines
 
 These guidelines shape how you interact with the Miget API and with users. Read them before making any API calls.
+
+### Keeping This Skill Current
+
+A stale copy of this skill will describe endpoints and fields that no longer match the API. **The first time you use this skill in a session** — once, and only once — check whether a newer version has been published:
+
+1. Fetch the latest published release and read its `tag_name`:
+   ```bash
+   curl -s https://api.github.com/repos/migetapp/agent-skills/releases/latest
+   ```
+2. Compare it with the **Skill version** at the top of this file. **Only if the published version is newer than yours**, tell the user once and walk them through the update. First refresh everything the CLI manages:
+   ```bash
+   npx skills update
+   ```
+   Then **verify the copy your own agent reads**. A general update only refreshes agents the skill was installed for, so it can silently leave the current agent on an old version. Re-read the `Skill version` line in this agent's own skill directory — for example `~/.claude/skills/miget-api/SKILL.md` (global) or `./.claude/skills/miget-api/SKILL.md` (project). If it still shows the old version, install it for this agent explicitly:
+   ```bash
+   npx skills add migetapp/agent-skills -a claude-code
+   ```
+   Use whichever agent you are in place of `claude-code` (`codex`, `cursor`, `gemini-cli`, …). Tell the user that the copy already loaded in the current session does not change — the new version takes effect in the next session.
+3. Otherwise say nothing — do not announce that the skill is up to date.
+
+This check must never block or delay the user's actual request. If it fails for any reason (offline, rate-limited, unexpected response), skip it silently and carry on.
 
 ### Before You Make Any API Call
 
@@ -210,6 +233,10 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - Apps can have **environment variables** (vars)
 - Apps can have **ports** (exposed ports). Port `5000` is fixed: HTTP traffic on the app's `*.migetapp.com` URL is always served from port `5000` — the app must listen on `5000`, and this port cannot be removed or changed. Additional TCP/UDP ports can be added for custom protocols; they are **private by default** and can be exposed publicly via the expose endpoint (see workflow 9, and https://docs.miget.com/networking/ports for the full list of supported ports).
 - Apps can be **public or private** (`private_access`): a private app has no public ingress and is reachable only inside the workspace network. Settable on create/update (default `false`); returned in the app response.
+- Apps have an **internal URL** for app-to-app and addon connections inside the workspace network, returned as `internal_url` on the app response in the form `<service_name>.<resource-name>.<region-code>.migetapp.internal:5000` (null until a compute Resource is assigned). Traffic from other Miget apps requires `allow_connections: true` (default `false`, set via `PUT /apps/{uuid}/security`); once enabled, the app is reachable at its `internal_url`.
+- Resource limits are reported under `quota` on the app response: `quota.ram_size` is in **bytes** (e.g. `134217728` = 128 MiB) and `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields.
+- The app response also returns `basic_auth_enabled` (whether HTTP Basic Auth is enforced at the ingress). Basic Auth credentials are **never** returned by the API.
+- Every app automatically gets **monitoring** — Grafana dashboards, metrics, and logs, with Prometheus/Loki-compatible query APIs at `metrics.miget.com`. Runtime metrics and app logs are **not** on the REST API; see the Monitoring & Observability section.
 
 ### Projects
 
@@ -785,7 +812,7 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `PATCH /api/v1/apps/{uuid}/state` - Change app state (schedule_start/schedule_stop/schedule_restart)
 - `POST /api/v1/apps/{uuid}/clone` - Clone an application (copy env vars, secret files, scaling, health checks, addons, cronjobs)
 - `PUT /api/v1/apps/{uuid}/deployment` - Update deployment method and configuration (switch methods, update Kamal SSH keys)
-- `POST /api/v1/apps/{uuid}/deploy` - Trigger deployment (optional: custom_tag, commit_sha, branch). Not used for Kamal apps.
+- `POST /api/v1/apps/{uuid}/deploy` - Trigger deployment (optional: custom_tag, commit_sha, branch). Not used for Kamal apps. Returns `409 Conflict` if a deployment is already in progress — poll `GET /apps/{uuid}/deployments` and retry once it settles.
 - `PUT /api/v1/apps/{uuid}/health_checks` - Update health check probes (liveness, readiness, startup)
 - `PUT /api/v1/apps/{uuid}/scaling_profile` - Update scaling profile (replicas, auto-scaling, thresholds). Not available on free plan.
 - `GET /api/v1/apps/{uuid}/deployments` - List deployments
@@ -854,12 +881,13 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `GET /api/v1/apps/{uuid}/cronjobs` - List cronjobs
 - `POST /api/v1/apps/{uuid}/cronjobs` - Create cronjob
 - `GET /api/v1/apps/{uuid}/cronjobs/{id}` - Get cronjob details
-- `PUT /api/v1/apps/{uuid}/cronjobs/{id}` - Update cronjob
+- `PUT /api/v1/apps/{uuid}/cronjobs/{id}` - Update cronjob (**only `label` and `command` are updatable**; the schedule cannot be changed via PUT — DELETE and recreate the cronjob to reschedule)
 - `DELETE /api/v1/apps/{uuid}/cronjobs/{id}` - Delete cronjob
+- `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` - Stream the most recent run's logs in real-time (SSE, text/event-stream; returns 404 until the job has run at least once)
 
 ### App Deployments
 
-- `GET /api/v1/apps/{uuid}/deployments` - List deployments (optional filters: `status` (pending/running/completed/failed/cancelling/cancelled), `period` (7days/30days/90days/all))
+- `GET /api/v1/apps/{uuid}/deployments` - List deployments (optional filters: `status` (pending/running/completed/failed/cancelling/cancelled), `period` (7days/30days/90days/all)). Each record includes `commit_sha`, `commit_message`, and `branch` for git-based deployment methods (null otherwise).
 - `GET /api/v1/apps/{uuid}/deployments/{id}` - Get deployment details
 - `GET /api/v1/apps/{uuid}/deployments/{id}/logs` - Get build logs (text/plain, available after deployment completes)
 - `GET /api/v1/apps/{uuid}/deployments/{id}/stream_logs` - Stream logs in real-time (SSE, text/event-stream, for running deployments)
@@ -1707,6 +1735,10 @@ What would you like to set up?"
 - `minute` (string) - Minute component for scheduling (0-59)
 - `hour` (string) - Hour component for scheduling (0-23)
 
+**Important notes:**
+- Updating a cronjob (`PUT`) only changes `label` and `command`. The **schedule cannot be changed in place** — to reschedule, DELETE the cronjob and create a new one.
+- Per-run logs are available via `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` (SSE) once the job has run at least once.
+
 **Example questions to ask:**
 - "What should be the cronjob name?"
 - "What display label should I use?"
@@ -1897,6 +1929,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 **Constraints:**
 - Requires `apps:manage` permission
 - When `basic_auth_enabled` is true, both `basic_auth_username` and `basic_auth_password` are required (unless password already exists and you want to keep it)
+- The app response returns `basic_auth_enabled` so you can tell whether Basic Auth is enforced, but Basic Auth **credentials are never returned** by the API.
 
 **Example questions to ask:**
 - "Should I enable Basic Authentication? (true/false)"
@@ -2016,6 +2049,52 @@ Creates a storage addon on the app linked to this service.
 
 ---
 
+## Monitoring & Observability
+
+Every app on Miget automatically gets metrics, logs, and pre-built Grafana dashboards — no setup. For **any** observability question (resource usage, request rates, restarts, errors, why a pod or cron run misbehaved), look here and in the Miget monitoring docs first: the REST API deliberately does **not** expose runtime metrics or app logs.
+
+**Docs:** https://docs.miget.com/monitoring/overview · `/metrics` · `/metrics-api` · `/logs`
+
+### In Grafana (UI)
+
+Click **Monitoring** on an app's dashboard to open Grafana (automatic login — no credentials). Three pre-built dashboards ship with every app: **App Overview**, **Pod Details**, and **Logs**; custom dashboards can be built in Grafana.
+
+### Metrics API (Prometheus-compatible)
+
+Base URL `https://metrics.miget.com`. Auth: `Authorization: Bearer <miget_live_token>` — the **same Miget API token** you already use for the REST API (see Authentication); there is no separate Grafana credential. Scope with the `X-Workspace-Id: <workspace-uuid>` header. Query language: **PromQL**. Subject to fair-use rate limits (`429` on throttle).
+
+- Instant query: `GET /prometheus/api/v1/query?query=<PromQL>[&time=<ts>]`
+- Range query: `GET /prometheus/api/v1/query_range?query=<PromQL>&start=<ts>&end=<ts>&step=<e.g. 60s>`
+- Label discovery: `GET /prometheus/api/v1/labels` · `GET /prometheus/api/v1/label/{name}/values`
+
+Metrics are prefixed `miget_` and carry common labels `namespace`, `app`, `addon`, `addon_type`, `instance` (HTTP metrics add `status`/`method`; disk adds `device`). Common series:
+- **App:** `miget_app_replicas_desired`, `miget_app_replicas_available`, `miget_app_http_responses_total`, `miget_app_http_response_time_seconds_bucket`
+- **Instance (pod):** `miget_instance_cpu_usage`, `miget_instance_memory_used_bytes`, `miget_instance_net_recv_bytes_total`, `miget_instance_disk_read_bytes_total`, `miget_instance_status_phase`, `miget_instance_restarts_total`
+- **Volume:** `miget_volume_used_bytes`, `miget_volume_size_bytes`, `miget_volume_iops_limit`
+- **Addon (PostgreSQL):** connections, database size, replication lag
+
+Example — last hour of CPU for an app:
+`GET https://metrics.miget.com/prometheus/api/v1/query_range?query=miget_instance_cpu_usage{app="my-app"}&start=<ts>&end=<ts>&step=60s`
+
+### Logs API (Loki-compatible)
+
+Same host and auth as the Metrics API. Query language: **LogQL**.
+- `GET https://metrics.miget.com/loki/api/v1/query_range?query={app="my-app"}&limit=100`
+- Narrow to a specific cron run by pod: `{app="my-app", pod="<last_job_name>"}`.
+
+See https://docs.miget.com/monitoring/logs#logs-via-api.
+
+### Retention (by plan)
+
+| Plan | Metrics | Logs |
+|---|---|---|
+| Free | 30 days | 3 days |
+| Pay as you grow | 13 months | 7 days |
+
+Short-lived cron pods may fall between metric scrapes, so their `miget_instance_*` series can be sparse or absent; their **logs** are still queryable via the Logs API (and the cron `stream_logs` endpoint) while retained.
+
+---
+
 ## Best Practices
 
 1. **Use API Tokens for Automation**
@@ -2049,6 +2128,13 @@ Creates a storage addon on the app linked to this service.
      - If the user is hitting the default `*.migetapp.com` URL: the app must listen on port `5000` (HTTP is always served from `5000` and cannot be changed). If it's listening on a different port, tell the user to change the app to listen on `5000`.
      - If the user is hitting a custom TCP/UDP port directly: list ports via `GET /api/v1/apps/{uuid}/ports` and confirm the port exists and is public. Extra ports are **private by default** — expose them with `expose_publicly`.
    - Only after ports look right, check deployment status, domains, and logs.
+
+7. **Observability — metrics, logs, dashboards**
+   - For resource usage, request rates, restarts, errors, or any runtime "what's happening" question, use the **Monitoring & Observability** section above (Grafana dashboards + Prometheus/Loki query APIs at `metrics.miget.com`) and https://docs.miget.com/monitoring/overview.
+   - The REST API only serves **build/deploy** logs (`GET /api/v1/apps/{uuid}/deployments/{id}/logs`, `/stream_logs`) and **cron run** logs (`GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs`). App **runtime** logs and all metrics live in the monitoring APIs, not the REST API.
+
+8. **In-container HTTP tooling**
+   - The default build image is minimal and may not include `curl`/`wget`. For outbound HTTP from your app or a cron command, prefer your language's native HTTP client, or install the tool in your Dockerfile.
 
 ---
 
