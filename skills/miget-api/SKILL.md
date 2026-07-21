@@ -91,11 +91,15 @@ A stale copy of this skill will describe endpoints and fields that no longer mat
    ```bash
    curl -s https://api.github.com/repos/migetapp/agent-skills/releases/latest
    ```
-2. Compare it with the **Skill version** at the top of this file. **Only if the published version is newer than yours**, tell the user once and offer the update command — `update` takes the skill name, `add` takes the repository:
+2. Compare it with the **Skill version** at the top of this file. **Only if the published version is newer than yours**, tell the user once and walk them through the update. First refresh everything the CLI manages:
    ```bash
-   npx skills update miget-api          # or: npx skills update   (all installed skills)
-   npx skills add migetapp/agent-skills # if it was not installed via the skills CLI
+   npx skills update
    ```
+   Then **verify the copy your own agent reads**. A general update only refreshes agents the skill was installed for, so it can silently leave the current agent on an old version. Re-read the `Skill version` line in this agent's own skill directory — for example `~/.claude/skills/miget-api/SKILL.md` (global) or `./.claude/skills/miget-api/SKILL.md` (project). If it still shows the old version, install it for this agent explicitly:
+   ```bash
+   npx skills add migetapp/agent-skills -a claude-code
+   ```
+   Use whichever agent you are in place of `claude-code` (`codex`, `cursor`, `gemini-cli`, …). Tell the user that the copy already loaded in the current session does not change — the new version takes effect in the next session.
 3. Otherwise say nothing — do not announce that the skill is up to date.
 
 This check must never block or delay the user's actual request. If it fails for any reason (offline, rate-limited, unexpected response), skip it silently and carry on.
