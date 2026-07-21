@@ -91,9 +91,10 @@ A stale copy of this skill will describe endpoints and fields that no longer mat
    ```bash
    curl -s https://api.github.com/repos/migetapp/agent-skills/releases/latest
    ```
-2. Compare it with the **Skill version** at the top of this file. **Only if the published version is newer than yours**, tell the user once and offer the update command:
+2. Compare it with the **Skill version** at the top of this file. **Only if the published version is newer than yours**, tell the user once and offer the update command — `update` takes the skill name, `add` takes the repository:
    ```bash
-   npx skills update miget-api
+   npx skills update miget-api          # or: npx skills update   (all installed skills)
+   npx skills add migetapp/agent-skills # if it was not installed via the skills CLI
    ```
 3. Otherwise say nothing — do not announce that the skill is up to date.
 
