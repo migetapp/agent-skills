@@ -1,7 +1,7 @@
 # Miget Agent Skills
 
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.9-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.10-green.svg)](CHANGELOG.md)
 
 Agent skills for [Miget](https://miget.com) - a Kubernetes-based Platform-as-a-Service (PaaS) for deploying and managing applications, databases, and services in the cloud.
 

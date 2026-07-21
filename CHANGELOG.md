@@ -10,6 +10,7 @@ Document new app, deployment, and cron-job response fields, the deploy-in-progre
 - **Deploy while busy:** `POST /api/v1/apps/{uuid}/deploy` now returns `409 Conflict` when a deployment is already in progress — poll `GET /api/v1/apps/{uuid}/deployments` and retry once it settles
 - **Cron reschedule and resource units:** clarified that a cron job's schedule cannot be changed via `PUT` (delete and recreate to reschedule), and that `quota.ram_size` is reported in bytes
 - **Monitoring & Observability:** added a section covering the Grafana dashboards every app ships with and the Prometheus-compatible Metrics API and Loki Logs API at `https://metrics.miget.com` (PromQL/LogQL, auth, common `miget_*` series, retention) — where agents should look for resource usage, request rates, restarts, errors, and runtime logs
+- **Self-updating:** the skill now states its own version and tells the agent to compare it once per session against the latest published release, suggesting `npx skills update miget-api` only when a newer one exists — a stale copy otherwise keeps describing endpoints that no longer match the API
 
 ---
 

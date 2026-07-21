@@ -5,6 +5,8 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
+**Skill version:** `0.1.10` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+
 ## Overview
 
 Miget is a Kubernetes-based Platform-as-a-Service (PaaS) similar to Heroku or Render. It allows developers to deploy and manage applications, databases, and services in the cloud with minimal infrastructure management.
@@ -80,6 +82,22 @@ Miget API supports two authentication methods:
 ## Agent Behavioral Guidelines
 
 These guidelines shape how you interact with the Miget API and with users. Read them before making any API calls.
+
+### Keeping This Skill Current
+
+A stale copy of this skill will describe endpoints and fields that no longer match the API. **The first time you use this skill in a session** — once, and only once — check whether a newer version has been published:
+
+1. Fetch the latest published release and read its `tag_name`:
+   ```bash
+   curl -s https://api.github.com/repos/migetapp/agent-skills/releases/latest
+   ```
+2. Compare it with the **Skill version** at the top of this file. **Only if the published version is newer than yours**, tell the user once and offer the update command:
+   ```bash
+   npx skills update miget-api
+   ```
+3. Otherwise say nothing — do not announce that the skill is up to date.
+
+This check must never block or delay the user's actual request. If it fails for any reason (offline, rate-limited, unexpected response), skip it silently and carry on.
 
 ### Before You Make Any API Call
 
