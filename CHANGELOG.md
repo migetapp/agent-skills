@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0 — 2026-07-27
+
+Rewrite the skill to deploy from what a project already says, and document the Git build settings the API now accepts.
+
+- **Deploy without the interrogation:** the skill previously told agents to ask the user for every required field before creating anything, which turned "deploy this repo" into six questions before any work happened. It now reads the repository and the account first, presents a single plan covering everything that will be created — each row naming the evidence behind it, plus the monthly cost — and asks for one confirmation. Explicit user instructions are still used verbatim, and questions are reserved for choices that genuinely cannot be derived or that are expensive to undo
+- **Platform constraints in one place:** the fixed rules that break a first deployment — HTTP always served on port 5000, no implicit release phase, extra ports private and TCP/UDP only, app-to-app traffic off until enabled, runtime logs and metrics living outside the REST API, `quota` reported in bytes — are now stated up front instead of being scattered through the reference
+- **Reading a project:** a signal-to-conclusion table mapping `package.json`, `requirements.txt`, `Gemfile`, `go.mod`, `prisma/schema.prisma`, `Dockerfile`, `docker-compose.yml` and friends to the deployment method, builder, addons and migration command they imply — including that a compose file means a stack rather than an app. Environment files are read for variable *names*; values are imported through the vars endpoint and never printed
+- **Defaults worth deriving:** sizing guidance per workload, how to choose a region and the cheapest plan that fits, and addon defaults. Notably, omitting `ram_size`/`cpu_size` when creating an app hands it the resource's entire remaining RAM and CPU — the skill now tells agents to always set them explicitly
+- **Deployment is verified, not assumed:** a deployment reaching `completed` only means the image built and the pods started. The skill now defines "done" as the app's URL answering, with a symptom-to-fix table covering the wrong listen port, missing variables, an unmigrated database, out-of-memory restarts and unexposed ports
+- **Git build settings:** `POST /api/v1/apps` and `PUT /api/v1/apps/{uuid}/deployment` now accept `project_path`, `run_command`, `language`, `build_command`, `pre_deploy_command`, `post_deploy_command` and `use_dhi` in the `public_git` and `github` deployment configuration, and they are returned on the app response
+- **Release-phase migrations:** there is no implicit release phase, so database migrations belong in `pre_deploy_command` (`npx prisma migrate deploy`, `alembic upgrade head`, `bin/rails db:migrate`, …) where they run once before a release rather than on every replica boot
+- **`builder: "custom"` is now usable:** it requires `language` and `build_command`, which previously could not be sent — the builder was selectable but not configurable
+- **Monorepos:** set `project_path` to the subdirectory holding the app and the build treats it as the root
+- **App response for `public_git`:** `GET /api/v1/apps/{uuid}` returns the repository under `repository_url`, matching the field name used to create and update it. This request previously failed for `public_git` apps
+- **Deployment update response:** `PUT /api/v1/apps/{uuid}/deployment` now returns the configuration it just saved, instead of a null `deployment_config`
+- **Derived stack variables:** some stacks declare a variable computed from another (a Supabase `ANON_KEY` signed with the stack's `JWT_SECRET`, for example). The platform always derives those from their source, so a value supplied for one in `env_var_overrides` is ignored — supply the source variable, or let `auto_populate_required_vars` generate it
+
+---
+
 ## 0.1.10 — 2026-07-21
 
 Document new app, deployment, and cron-job response fields, the deploy-in-progress conflict, and Grafana monitoring (metrics & logs APIs).

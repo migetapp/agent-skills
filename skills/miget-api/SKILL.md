@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.1.10` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.2.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -14,6 +14,284 @@ Miget is a Kubernetes-based Platform-as-a-Service (PaaS) similar to Heroku or Re
 **Base URL:** `https://app.miget.com/api/v1`
 
 **API Documentation:** `https://app.miget.com/api/v1/docs` (Swagger/OpenAPI)
+
+---
+
+## Platform Constraints
+
+These are the platform's fixed rules. Most failed first deployments trace back to one of them, and none is discoverable from a repository — read them before you plan anything.
+
+| Constraint | What it means for you |
+|---|---|
+| **HTTP is always port 5000** | The app's public URL is served from port `5000`. It is created automatically, cannot be deleted, and no API parameter changes it. An app listening on 3000/8000/8080 will build and start, then never answer. Most frameworks read a `PORT` variable, so setting `PORT=5000` on the app is usually the whole fix; otherwise change the start command. |
+| **No implicit release phase** | Nothing runs between the build finishing and the new replicas starting. Database migrations belong in `pre_deploy_command` (`public_git` and `github` only), or they run on every replica boot. |
+| **Extra ports are private, and TCP/UDP only** | Additional ports default to private — pass `public: true` at creation or `PATCH .../expose_publicly` afterwards. They carry TCP/UDP, not HTTP. Port management is unavailable on the free plan (403). |
+| **App-to-app traffic is off by default** | `allow_connections` is `false` until set on the **destination** app (`PATCH /api/v1/apps/{uuid}/security_settings`). Until then it is not reachable at its `internal_url` from other apps on the same resource. |
+| **Runtime logs and metrics are not on the REST API** | The REST API serves build/deploy logs and cron run logs only. Application logs and metrics come from the Loki/Prometheus APIs at `metrics.miget.com`, using the *same* `miget_live_` token and an `X-Workspace-Id` header — there is no separate Grafana credential. |
+| **Basic Auth credentials are never returned** | The app response tells you whether Basic Auth is on, never what the credentials are. Do not try to read them back. |
+| **`quota` is in bytes** | `quota.ram_size` is bytes (`134217728` = 128 MiB), `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields on the response. |
+| **Addon vs standalone service** | An addon's lifecycle is tied to its app and is the right default — deleting the app deletes it. A standalone service outlives any single app. Note that explicit mounting works only for `shared_storage`; a shared database is shared by pointing several apps at its connection variables, not by mounting it. |
+| **A compose file means a Stack** | A repository with `docker-compose.yml` is a Stack, not an App, and uses an entirely different set of endpoints. Do not try to force it into a single app. |
+
+---
+
+## How to Work
+
+Miget is meant to be driven, not to conduct an interview. Nearly everything needed to deploy a project is discoverable — from the repository in front of you and from the user's own account. Derive what you can, say what you inferred and from which file, and ask only about what is genuinely unknowable or irreversible.
+
+A deploy request always has the same shape:
+
+1. **Read the project** — language, framework, databases, ports, migrations. See "Reading the Project".
+2. **Read the account** — `GET /api/v1/resources`, `/api/v1/projects`, `/api/v1/plans`, `/api/v1/regions`, so you build on what already exists instead of duplicating it.
+3. **Present one plan** — everything that will be created, what each choice was inferred from, what is a guess, and the monthly cost. See "The Plan Card".
+4. **Take one confirmation** — a single yes, on the whole picture.
+5. **Execute** — create, configure, deploy.
+6. **Verify** — confirm the app actually answers. See "Verifying a Deployment".
+
+This replaces asking for region, plan, deployment method, addon type, RAM and CPU one field at a time. Six questions before anything happens fails both audiences: a first-time user cannot answer them, and an experienced user resents being asked what the repo already says.
+
+**Ask a real question only when:**
+- the choice cannot be derived from the repo or the account — for example which of three existing projects to use, when none matches the repository,
+- the choice is expensive or hard to undo — a plan materially pricier than the obvious default, or anything destructive,
+- the request is ambiguous about *intent*, not merely about mechanism.
+
+**An explicit instruction always wins.** If the user says "deploy this to us-east-1 on the pro plan with a postgres addon", use those values verbatim — do not re-derive them, and do not present a plan card nobody asked for. Honour "just do it, don't explain" and "walk me through every step" equally.
+
+**Never assume consent for:** anything that costs more than the plan the user confirmed, anything destructive (deleting apps, addons, buckets, or data), and anything involving the user's credentials.
+
+### Session Setup
+
+Do these once, before your first API call.
+
+**1. Find the API token.** All API calls require authentication. Follow this sequence:
+
+   **Step 1: Check environment variables.**
+   Look for `MIGET_API_TOKEN` in the user's shell environment (e.g., run `echo $MIGET_API_TOKEN`). If the variable is set and non-empty, use it as the `Authorization: Bearer` token for all API calls.
+
+   **Step 2: If no token is found, ask the user.**
+   Ask whether they already have a Miget account and an API token. Present these scenarios:
+
+   - **"I have an API token"** - Ask them to provide it, then suggest storing it (see Step 4).
+   - **"I have an account but no token"** - Guide them to generate one:
+     1. Go to **https://app.miget.com/my_account#api_tokens**
+     2. Click **"Create new token"**
+     3. Give it a name (e.g., `cli-agent`)
+     4. Copy the token (it starts with `miget_live_`)
+     5. Share it back so you can proceed, then suggest storing it (see Step 4).
+   - **"I don't have an account"** - Direct them to sign up first:
+     1. Go to **https://app.miget.com/users/sign_up**
+     2. Create an account and verify email
+     3. Once signed in, generate an API token at **https://app.miget.com/my_account#api_tokens**
+     4. Share the token back, then suggest storing it (see Step 4).
+
+   **Step 3: Do not proceed without a valid token.** Attempting API calls without authentication wastes time and confuses the user with 401 errors.
+
+   **Step 4: Suggest persisting the token in shell config.**
+   After receiving a token, recommend the user store it so it's available automatically in future sessions:
+
+   For **zsh** (default on macOS):
+   ```bash
+   echo 'export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+
+   For **bash**:
+   ```bash
+   echo 'export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"' >> ~/.bashrc
+   source ~/.bashrc
+   ```
+
+   For **fish**:
+   ```fish
+   set -Ux MIGET_API_TOKEN "miget_live_xxxxxxxxxxxxx"
+   ```
+
+   Once stored, the token will be detected automatically in Step 1 on every future session.
+
+**2. Confirm this skill is current.** This API changes often, and a stale copy will describe fields that no longer match it. Once per session, alongside finding the token, fetch the latest published release and read its `tag_name`:
+
+   ```bash
+   curl -s https://api.github.com/repos/migetapp/agent-skills/releases/latest
+   ```
+
+   Compare it with the **Skill version** at the top of this file. **Only if the published version is newer than yours**, tell the user once and walk them through the update. First refresh everything the CLI manages:
+
+   ```bash
+   npx skills update
+   ```
+
+   Then **verify the copy your own agent reads**. A general update only refreshes agents the skill was installed for, so it can silently leave the current agent on an old version. Re-read the `Skill version` line in this agent's own skill directory — for example `~/.claude/skills/miget-api/SKILL.md` (global) or `./.claude/skills/miget-api/SKILL.md` (project). If it still shows the old version, install it for this agent explicitly:
+
+   ```bash
+   npx skills add migetapp/agent-skills -a claude-code
+   ```
+
+   Use whichever agent you are in place of `claude-code` (`codex`, `cursor`, `gemini-cli`, …). Tell the user that the copy already loaded in the current session does not change — the new version takes effect in the next session.
+
+   If the version matches, say nothing. Never let this check block or delay the user's actual request: if it fails for any reason (offline, rate-limited, unexpected response), skip it silently and carry on.
+
+**3. Know which workspace you are in.** Miget uses workspace-based multi-tenancy. Include the `X-Workspace-Id` header when the user works with multiple workspaces. If omitted, the API uses the user's default workspace.
+
+### Reading the Project
+
+Before asking anything, read the repository. Most of a deployment plan is already written down in it.
+
+| Signal | What it tells you |
+|--------|-------------------|
+| `package.json` with `next`, `nest`, `express`, `remix` | Node app, `builder: "auto"`; framework drives sizing |
+| `requirements.txt`, `pyproject.toml`, `Pipfile` | Python; read deps for `django`, `flask`, `fastapi` |
+| `Gemfile` + `config/database.yml` | Rails; the adapter in `database.yml` names the database it needs |
+| `go.mod` / `composer.json` / `Cargo.toml` / `pom.xml`, `build.gradle` | Go / PHP / Rust / JVM |
+| `prisma/schema.prisma` | Read `datasource.provider` → `postgres` or `mysql` addon |
+| `drizzle.config.*`, `knexfile.*`, `alembic.ini`, `db/migrate/` | Migration tooling → set `pre_deploy_command` |
+| `ioredis`, `redis`, `redis-py`, `sidekiq`, `celery`, `bullmq` in deps | Needs a Valkey addon |
+| `.env.example`, `.env.local`, `.env.sample` | The variable **names** the app expects |
+| `Dockerfile` | `builder: "dockerfile"`; read its `EXPOSE` and `CMD` |
+| **`docker-compose.yml` / `compose.yaml`** | **This is a Stack, not an App** — use the stacks endpoints instead |
+| `compose.miget.yaml` | A stack whose platform overrides are already tuned — prefer it over a plain compose file |
+| Code listening on `:3000`, `:8000`, `:8080` | Must serve on **5000** — see Platform Constraints |
+| A nested app directory, or `workspaces` in `package.json` | Monorepo → set `project_path` |
+| `.github/workflows/`, `Procfile`, `render.yaml`, `fly.toml`, `app.json` | Prior deployment intent — read it for build/start commands and env vars |
+
+**Report what you found, not that you looked.** "Next.js with Prisma pointing at PostgreSQL, migrations via `prisma migrate deploy`" is useful. "I have analysed your repository" is not.
+
+**Handling `.env` files — read names, never expose values.**
+- Read `.env*` to learn which variables the app expects and to spot which look like secrets.
+- Send values to Miget with `POST /api/v1/apps/{uuid}/vars` (or `app_vars_attributes` at creation).
+- **Never print a secret value** in chat, in a summary, in a log line, or in a commit. Refer to variables by name only.
+- Never commit a `.env` file, and never copy secrets into a compose file or a Dockerfile.
+- If a required variable has no value anywhere (a `.env.example` placeholder like `changeme` or an empty string), that is one of the few things genuinely worth asking about — or generate a strong random value when it is clearly an app-internal secret such as `SESSION_SECRET` or `JWT_SECRET`, and tell the user you did.
+
+### Choosing Defaults
+
+Derive these rather than asking. Read live values from `GET /api/v1/plans` and `GET /api/v1/regions` — never quote a price from memory.
+
+**Region.** The platform has no default region. Prefer, in order: the region of a resource the user already owns; then the region implied by where they are (North America → `us-east-1`, everywhere else → `eu-east-1`, which is the same fallback the platform uses at signup). Say which you picked and offer to change it.
+
+**Resource.** Reuse an existing resource with enough free RAM before creating a new one — `GET /api/v1/resources`. A new resource is a new monthly charge; reusing one is free. When you do need a new one, pick the **cheapest plan from `GET /api/v1/plans` whose `ram_size` and `cpu_size` cover the app plus every addon you are about to attach**, with a little headroom — the app and its databases all draw on the same resource. Do not reach for a larger plan speculatively; resizing later is easy.
+
+**Always set `ram_size` and `cpu_size` explicitly.** If you omit them, the app is given *the entire remaining RAM and CPU of the resource*, leaving no room for anything else on it. This is the single most common way to quietly wedge an account. Values are in MiB and fractional cores; the floor for placing an app is 128 MiB.
+
+| Workload | `ram_size` | `cpu_size` |
+|---|---|---|
+| Static site or SPA build | 256 | 0.25 |
+| Go / Rust binary | 256 | 0.25 |
+| Node API (Express, Fastify, NestJS) | 512 | 0.5 |
+| Next.js / Nuxt / Remix (SSR) | 512–1024 | 0.5 |
+| Django / Flask / FastAPI | 512 | 0.5 |
+| Rails | 512–1024 | 0.5 |
+| JVM (Spring Boot) | 1024+ | 1.0 |
+
+Treat these as starting points, not platform rules — raise them if the app is memory-hungry, and check them against the resource's free capacity before sending.
+
+**Addons.** Their defaults are sensible; supply a size only when the app clearly needs more.
+
+| Addon | Default RAM | Default disk | Default CPU |
+|---|---|---|---|
+| `postgres` | 128 MiB | 0.5 GiB | 0.1 |
+| `mysql` | 128 MiB | 0.5 GiB | 0.1 |
+| `valkey` | 32 MiB | 0.1 GiB | 0.1 |
+
+Prefer an **addon** over a standalone service unless more than one app genuinely needs the same database.
+
+**The free plan.** One free resource per user, personal workspaces only, and it is small: 0.1 core, 256 MiB RAM, 1 GiB disk — so an app on it must fit inside 256 MiB. It also cannot use public custom ports, autoscaling, cron jobs, or Postgres backups, and addon CPU is pinned to 0.1 regardless of what you request. It suits a first deploy or a demo; say plainly when a project has outgrown it rather than trying to squeeze it in.
+
+A free resource holding **no apps and no services** is deleted after 30 days of inactivity; one with an app on it is never auto-deleted. Deployed apps currently run continuously on every plan — nothing is idled or put to sleep. Treat that as today's behaviour rather than a promise, and do not build an argument for the free plan on guaranteed uptime.
+
+### The Plan Card
+
+Present exactly one of these before creating anything, then ask once.
+
+> **Deploying `acme-storefront` to Miget**
+>
+> | | | Why |
+> |---|---|---|
+> | Resource | new, `Miget Hobby Tier 2` (1 core, 1 GiB) in `eu-east-1` | no existing resource in this workspace; 1 GiB fits the app plus the database |
+> | App | `acme-storefront`, builder `auto`, 512 MiB / 0.5 core | `package.json` → Next.js 15 |
+> | Deploy from | GitHub `acme/storefront`, branch `main` | current repo remote |
+> | Database | PostgreSQL addon | `prisma/schema.prisma` → `provider = "postgresql"` |
+> | Migrations | `pre_deploy_command: npx prisma migrate deploy` | Prisma migrations in `prisma/migrations/` |
+> | Env vars | 6 imported from `.env.local`; `NEXTAUTH_SECRET` generated | — |
+> | **Cost** | **$7.00/month** | the resource plan; the addon draws on its capacity, not a separate charge |
+>
+> Guessing on: region (no signal in the repo — say the word if you want somewhere else).
+>
+> Deploy this?
+
+Rules for the card:
+- **Every row names its evidence.** A row you cannot justify is a row you should be asking about.
+- **Always state the cost**, read live from `GET /api/v1/plans` — never from memory, and never from the example above. Addons and apps consume the resource's capacity rather than being billed separately, so the monthly figure is the resource plan (plus any components). If it is free, say so.
+- **Separate inference from guesswork.** Anything with no signal behind it goes in an explicit "guessing on" line.
+- **One card, one question.** Do not follow it with more questions unless the user's answer opens a genuinely new choice.
+
+### Two Registers
+
+The same decisions get explained at different densities depending on who is asking. Infer the register — never ask "are you experienced?", which is both insulting and unreliable.
+
+**Read as new to the platform when:** the request is goal-level ("put this online", "push this to miget"), the repo has no Dockerfile, CI config, or infrastructure files, the workspace is empty, or the user asks what a term means.
+
+**Read as fluent when:** the request is mechanism-level ("pro resource in us-east-1, 2 vCPU, postgres addon"), platform vocabulary is used correctly, or the account already holds several resources and projects.
+
+A correction using platform vocabulary shifts the register up for the rest of the session. A question like "what's an addon?" shifts it down.
+
+The same moment, explanatory:
+
+> Your app needs somewhere to run, so I'll create a **resource** — a small slice of compute in Miget's `eu-east-1` region — and put the app on it. Prisma is pointing at PostgreSQL, so I'll attach a **Postgres addon**: a managed database whose connection string lands in your app's environment automatically, and whose lifecycle follows the app. Your migrations will run once before each release rather than on every restart.
+>
+> That comes to $7.00/month — the database runs inside the same resource, so it is not billed separately. Shall I go ahead?
+
+and terse:
+
+> `miget_hobby_2` in `eu-east-1`, app `acme-storefront` (builder `auto`, 512 MiB/0.5, GitHub `acme/storefront@main`), Postgres addon, `pre_deploy_command: npx prisma migrate deploy`, 6 vars from `.env.local`. $7/mo. Go?
+
+**Register changes how much is explained. It never changes how much is done without asking.** Both versions above make the same decisions and both stop at the same single confirmation. Inverting that — acting more freely for users who seem inexperienced — would give the least oversight to the people least able to catch a mistake.
+
+### Verifying a Deployment
+
+A deployment reaching `completed` means the image built and the pods started. It does not mean the app works. **You are done when the app's URL answers with a non-5xx status** — check it before telling the user it is live.
+
+1. Poll `GET /api/v1/apps/{uuid}/deployments/{id}` until the status settles.
+2. Request the app's URL.
+3. If that fails, pull build logs from `GET /api/v1/apps/{uuid}/deployments/{id}/logs`, and runtime logs from the Loki API (see "Monitoring & Observability" — runtime logs are not on the REST API).
+4. Work the table below.
+5. Fix and redeploy, or tell the user precisely what is wrong. Never report a deployment as successful without having checked the URL.
+
+| Symptom | Probe | Likely cause | Fix |
+|---------|-------|--------------|-----|
+| Deploy succeeded, URL times out or 502s | Runtime logs show the server listening on 3000/8080 | App is not on port 5000 | Make the app bind `5000` (usually `PORT`/`process.env.PORT`), redeploy |
+| Container starts then exits immediately | Runtime logs show a config or connection error at boot | Missing environment variable | Compare `.env.example` against `GET /api/v1/apps/{uuid}/vars`, add what's missing |
+| App 500s on every request touching data | Runtime logs show "relation does not exist" / "no such table" | Database never migrated | Set `pre_deploy_command`, redeploy |
+| Pod restarts repeatedly | Metrics show memory at the quota ceiling | Out of memory | Raise `ram_size` on the app, or reduce the app's footprint |
+| Build fails early | Build logs show a missing command or failed install | Build image lacks the tool, or the wrong builder | Check the builder, `build_command`, and `project_path` for monorepos |
+| App reachable, but cannot reach another app | Target app's `allow_connections` is `false` | Internal traffic is off by default | Enable `allow_connections` on the target app |
+| A non-HTTP port refuses connections from outside | `GET /api/v1/apps/{uuid}/ports` shows it as private | Extra ports are private by default | Expose it publicly — see the ports endpoints |
+
+
+### General Best Practices
+
+**1. Use the OpenAPI spec as a fallback.** If you encounter an endpoint or parameter not covered in this guide, consult the OpenAPI spec at `https://app.miget.com/docs/openapi.json` for the exact schema. You don't need to load it proactively - this guide covers the common cases.
+
+**2. Handle async operations.** Deployments and resource provisioning are asynchronous. Poll the relevant status endpoint to track progress rather than assuming immediate completion.
+
+**3. Handle errors gracefully.** Parse error responses and provide helpful feedback to the user:
+   - `400` - Validation error, check required fields
+   - `401` - Authentication failed, check token
+   - `403` - Permission denied, check user permissions
+   - `404` - Resource not found, verify IDs/UUIDs
+   - `422` - Validation failed, check field values
+
+**4. Validate before creating.** Before creating resources, verify that dependencies exist:
+   - Verify project exists (if creating app)
+   - Verify resource exists (if assigning to app)
+   - Verify region exists (if creating resource)
+   - Check if names are available (apps, projects must be unique within a workspace)
+   - **Validate user-supplied links.** When the user gives a source URL — a `public_git` repository, a `container_registry` image reference, or a stack `repository_url` — check its format before sending the request. The platform rejects malformed or unreachable sources at creation, so catching it first lets you correct the user instead of surfacing a 422. See the per-method format rules under "Deployment Configuration by Method" (public Git URLs and container image references).
+
+**5. Provide helpful follow-up.** After creating resources, confirm what was created, provide the UUID/ID, and suggest logical next steps.
+
+**6. Run database migrations in `pre_deploy_command`.** Miget has no implicit release phase. For `public_git` and `github` apps, set `deployment_config.pre_deploy_command` so migrations run once before the new release starts — putting them in the start command runs them on every replica boot. See "Build Settings for `public_git` and `github`".
+
+**7. Store tokens securely.** Do not expose tokens in logs, error messages, or outputs shown to the user.
 
 ---
 
@@ -79,120 +357,6 @@ Miget API supports two authentication methods:
 
 ---
 
-## Agent Behavioral Guidelines
-
-These guidelines shape how you interact with the Miget API and with users. Read them before making any API calls.
-
-### Keeping This Skill Current
-
-A stale copy of this skill will describe endpoints and fields that no longer match the API. **The first time you use this skill in a session** — once, and only once — check whether a newer version has been published:
-
-1. Fetch the latest published release and read its `tag_name`:
-   ```bash
-   curl -s https://api.github.com/repos/migetapp/agent-skills/releases/latest
-   ```
-2. Compare it with the **Skill version** at the top of this file. **Only if the published version is newer than yours**, tell the user once and walk them through the update. First refresh everything the CLI manages:
-   ```bash
-   npx skills update
-   ```
-   Then **verify the copy your own agent reads**. A general update only refreshes agents the skill was installed for, so it can silently leave the current agent on an old version. Re-read the `Skill version` line in this agent's own skill directory — for example `~/.claude/skills/miget-api/SKILL.md` (global) or `./.claude/skills/miget-api/SKILL.md` (project). If it still shows the old version, install it for this agent explicitly:
-   ```bash
-   npx skills add migetapp/agent-skills -a claude-code
-   ```
-   Use whichever agent you are in place of `claude-code` (`codex`, `cursor`, `gemini-cli`, …). Tell the user that the copy already loaded in the current session does not change — the new version takes effect in the next session.
-3. Otherwise say nothing — do not announce that the skill is up to date.
-
-This check must never block or delay the user's actual request. If it fails for any reason (offline, rate-limited, unexpected response), skip it silently and carry on.
-
-### Before You Make Any API Call
-
-These are non-negotiable - skipping them leads to failed requests or broken resources.
-
-**1. Find the API token first.** All API calls require authentication. Follow this sequence:
-
-   **Step 1: Check environment variables.**
-   Look for `MIGET_API_TOKEN` in the user's shell environment (e.g., run `echo $MIGET_API_TOKEN`). If the variable is set and non-empty, use it as the `Authorization: Bearer` token for all API calls and skip ahead to guideline 2.
-
-   **Step 2: If no token is found, ask the user.**
-   Ask whether they already have a Miget account and an API token. Present these scenarios:
-
-   - **"I have an API token"** - Ask them to provide it, then suggest storing it (see Step 4).
-   - **"I have an account but no token"** - Guide them to generate one:
-     1. Go to **https://app.miget.com/my_account#api_tokens**
-     2. Click **"Create new token"**
-     3. Give it a name (e.g., `cli-agent`)
-     4. Copy the token (it starts with `miget_live_`)
-     5. Share it back so you can proceed, then suggest storing it (see Step 4).
-   - **"I don't have an account"** - Direct them to sign up first:
-     1. Go to **https://app.miget.com/users/sign_up**
-     2. Create an account and verify email
-     3. Once signed in, generate an API token at **https://app.miget.com/my_account#api_tokens**
-     4. Share the token back, then suggest storing it (see Step 4).
-
-   **Step 3: Do not proceed without a valid token.** Attempting API calls without authentication wastes time and confuses the user with 401 errors.
-
-   **Step 4: Suggest persisting the token in shell config.**
-   After receiving a token, recommend the user store it so it's available automatically in future sessions:
-
-   For **zsh** (default on macOS):
-   ```bash
-   echo 'export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"' >> ~/.zshrc
-   source ~/.zshrc
-   ```
-
-   For **bash**:
-   ```bash
-   echo 'export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"' >> ~/.bashrc
-   source ~/.bashrc
-   ```
-
-   For **fish**:
-   ```fish
-   set -Ux MIGET_API_TOKEN "miget_live_xxxxxxxxxxxxx"
-   ```
-
-   Once stored, the token will be detected automatically in Step 1 on every future session.
-
-**2. Ask for all required fields before creating resources.** Guessing values for fields like region, plan, or project leads to failed deployments or unexpected costs. Before making any creation API call:
-   - Ask the user explicitly for each required field
-   - Explain what each field is for and why it's needed
-   - If there are enum values (like plan types or deployment methods), list them so the user can choose
-   - See the "Required Fields for Creation Endpoints" section for per-endpoint details
-
-**3. Ask about database/cache deployment mode.** When a user asks to create a database (PostgreSQL, MySQL) or cache (Valkey), there are two fundamentally different approaches - creating the wrong one wastes time and may require starting over:
-   - **Standalone Service** (`POST /api/v1/services`) - A standalone managed service that can be shared across multiple apps
-   - **App Addon** (`POST /api/v1/apps/{uuid}/addons`) - Attached to a specific existing app, lifecycle tied to the app
-
-   Ask which they prefer before proceeding. See "Creating Addons and Services" section for details.
-
-**4. Understand which workspace you're in.** Miget uses workspace-based multi-tenancy. Include the `X-Workspace-Id` header when the user works with multiple workspaces. If omitted, the API uses the user's default workspace.
-
-### General Best Practices
-
-**5. Use the OpenAPI spec as a fallback.** If you encounter an endpoint or parameter not covered in this guide, consult the OpenAPI spec at `https://app.miget.com/docs/openapi.json` for the exact schema. You don't need to load it proactively - this guide covers the common cases.
-
-**6. Handle async operations.** Deployments and resource provisioning are asynchronous. Poll the relevant status endpoint to track progress rather than assuming immediate completion.
-
-**7. Handle errors gracefully.** Parse error responses and provide helpful feedback to the user:
-   - `400` - Validation error, check required fields
-   - `401` - Authentication failed, check token
-   - `403` - Permission denied, check user permissions
-   - `404` - Resource not found, verify IDs/UUIDs
-   - `422` - Validation failed, check field values
-
-**8. Validate before creating.** Before creating resources, verify that dependencies exist:
-   - Verify project exists (if creating app)
-   - Verify resource exists (if assigning to app)
-   - Verify region exists (if creating resource)
-   - Check if names are available (apps, projects must be unique within a workspace)
-   - **Validate user-supplied links.** When the user gives a source URL — a `public_git` repository, a `container_registry` image reference, or a stack `repository_url` — check its format before sending the request. The platform rejects malformed or unreachable sources at creation, so catching it first lets you correct the user instead of surfacing a 422. See the per-method format rules under "Deployment Configuration by Method" (public Git URLs and container image references).
-
-**9. Provide helpful follow-up.** After creating resources, confirm what was created, provide the UUID/ID, and suggest logical next steps (e.g., "App created! Would you like me to deploy it?").
-
-**10. Store tokens securely.** Do not expose tokens in logs, error messages, or outputs shown to the user.
-
----
-
 ## Core Concepts
 
 ### Workspaces
@@ -233,7 +397,7 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - Apps can have **environment variables** (vars)
 - Apps can have **ports** (exposed ports). Port `5000` is fixed: HTTP traffic on the app's `*.migetapp.com` URL is always served from port `5000` — the app must listen on `5000`, and this port cannot be removed or changed. Additional TCP/UDP ports can be added for custom protocols; they are **private by default** and can be exposed publicly via the expose endpoint (see workflow 9, and https://docs.miget.com/networking/ports for the full list of supported ports).
 - Apps can be **public or private** (`private_access`): a private app has no public ingress and is reachable only inside the workspace network. Settable on create/update (default `false`); returned in the app response.
-- Apps have an **internal URL** for app-to-app and addon connections inside the workspace network, returned as `internal_url` on the app response in the form `<service_name>.<resource-name>.<region-code>.migetapp.internal:5000` (null until a compute Resource is assigned). Traffic from other Miget apps requires `allow_connections: true` (default `false`, set via `PUT /apps/{uuid}/security`); once enabled, the app is reachable at its `internal_url`.
+- Apps have an **internal URL** for app-to-app and addon connections, returned as `internal_url` on the app response in the form `<service_name>.<resource-name>.<region-code>.migetapp.internal:5000` (null until a compute Resource is assigned). Traffic from other apps requires `allow_connections: true` on the **destination** app (default `false`, set via `PUT /apps/{uuid}/security`); once enabled, other applications on the same resource (miget) can reach it at its `internal_url`.
 - Resource limits are reported under `quota` on the app response: `quota.ram_size` is in **bytes** (e.g. `134217728` = 128 MiB) and `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields.
 - The app response also returns `basic_auth_enabled` (whether HTTP Basic Auth is enforced at the ingress). Basic Auth credentials are **never** returned by the API.
 - Every app automatically gets **monitoring** — Grafana dashboards, metrics, and logs, with Prometheus/Loki-compatible query APIs at `metrics.miget.com`. Runtime metrics and app logs are **not** on the REST API; see the Monitoring & Observability section.
@@ -1022,7 +1186,7 @@ If you get a `403 Forbidden` error, the user doesn't have the required permissio
 
 ## Required Fields for Creation Endpoints
 
-When creating resources, ask the user for all required fields before making the API call. Guessing values leads to failed requests or resources created in the wrong region/plan, which then need to be deleted and recreated.
+This section lists what each endpoint needs. It is a schema reference, not an interview script — derive what you can from the repository and the account first (see "How to Work"), fold the result into a single plan card, and ask only about what is left. What you must not do is *guess silently*: an unstated assumption about region or plan produces resources in the wrong place that then have to be deleted and recreated. Infer, say what you inferred and from where, and confirm once.
 
 ### Create Application (`POST /api/v1/apps`)
 
@@ -1031,7 +1195,7 @@ When creating resources, ask the user for all required fields before making the 
 - `label` (string) - Human-readable display name
 - `project_id` (string) - UUID of the project to create the application in (get from `GET /api/v1/projects`)
 - `resource_id` (string) - UUID of the compute resource (Miget) to assign (get from `GET /api/v1/resources`). The app's region is derived from this resource.
-- `builder` (string) - Build strategy: `"auto"`, `"dockerfile"`, or `"custom"`
+- `builder` (string) - Build strategy: `"auto"`, `"dockerfile"`, or `"custom"`. `"custom"` additionally requires `language` and `build_command` in `deployment_config` (see "Build Settings for `public_git` and `github`").
 
 **Optional but important:**
 - `ram_size` (float) - RAM allocation in MiB
@@ -1116,6 +1280,13 @@ Each `deployment_method` requires different fields in `deployment_config`:
 | `credential_id` | string | No | - | UUID of Git credentials (for private repos) |
 | `dockerfile_path` | string | No | `"./Dockerfile"` | Path to Dockerfile |
 | `build_context` | string | No | `"."` | Docker build context directory |
+| `project_path` | string | No | `""` | Subdirectory to build from, for monorepos |
+| `run_command` | string | No | - | Override the start command (builder `auto` or `custom`) |
+| `language` | string | No | - | Language to build with — **required** when `builder` is `custom` |
+| `build_command` | string | No | - | Build command — **required** when `builder` is `custom` |
+| `pre_deploy_command` | string | No | - | Command run once before the new release starts (e.g. database migrations) |
+| `post_deploy_command` | string | No | - | Command run once after a successful deploy |
+| `use_dhi` | boolean | No | `false` | Build on Docker Hardened Images; ignored when `builder` is `dockerfile` |
 
 **Validate the URL before you send it.** The platform enforces the format below and rejects a malformed or unreachable repo at creation — check it yourself first so you can correct the user instead of surfacing a 422:
 - Must be an **HTTPS** URL shaped `https://<host>/<owner>/<repo>` (the trailing `.git` is optional — it is normalized server-side). Examples: `https://github.com/rails/rails`, `https://gitlab.com/group/project.git`.
@@ -1148,6 +1319,50 @@ Each `deployment_method` requires different fields in `deployment_config`:
 | `auto_deploy_branch` | string | No | same as `branch` | Branch that triggers auto-deploy |
 | `dockerfile_path` | string | No | `"./Dockerfile"` | Path to Dockerfile |
 | `build_context` | string | No | `"."` | Docker build context directory |
+| `project_path` | string | No | `""` | Subdirectory to build from, for monorepos |
+| `run_command` | string | No | - | Override the start command (builder `auto` or `custom`) |
+| `language` | string | No | - | Language to build with — **required** when `builder` is `custom` |
+| `build_command` | string | No | - | Build command — **required** when `builder` is `custom` |
+| `pre_deploy_command` | string | No | - | Command run once before the new release starts (e.g. database migrations) |
+| `post_deploy_command` | string | No | - | Command run once after a successful deploy |
+| `use_dhi` | boolean | No | `false` | Build on Docker Hardened Images; ignored when `builder` is `dockerfile` |
+
+#### Build Settings for `public_git` and `github`
+
+The two Git-based methods share a set of build fields. They are also accepted on `PUT /api/v1/apps/{uuid}/deployment` under `deployment_config_attributes`.
+
+**Running database migrations.** Miget has no implicit release phase — nothing runs between the build finishing and the new replicas starting. Put migrations in `pre_deploy_command` so they run **once** before the new release goes live, rather than in the start command where every replica would run them on boot:
+
+```json
+{
+  "deployment_method": "public_git",
+  "deployment_config": {
+    "repository_url": "https://github.com/user/repo.git",
+    "branch": "main",
+    "pre_deploy_command": "npx prisma migrate deploy"
+  }
+}
+```
+
+Typical values: `npx prisma migrate deploy` (Prisma), `alembic upgrade head` (Alembic), `bin/rails db:migrate` (Rails), `python manage.py migrate` (Django). The other Git-based deployment methods have no equivalent field — for those, migrations have to run from the start command or a cronjob.
+
+**Using `builder: "custom"`.** The `custom` builder needs `language` **and** `build_command` in `deployment_config`; without them the build has nothing to run. `run_command` is optional but usually wanted, since `custom` does not infer a start command:
+
+```json
+{
+  "builder": "custom",
+  "deployment_method": "github",
+  "deployment_config": {
+    "credential_id": "{github-credential-uuid}",
+    "repository": "user/repo",
+    "language": "nodejs",
+    "build_command": "npm run build",
+    "run_command": "node server.js"
+  }
+}
+```
+
+**Monorepos.** Set `project_path` to the subdirectory holding the app (for example `apps/api`). The build then treats that directory as its root.
 
 **`container_registry`** - Deploy a pre-built container image from a registry (Docker Hub, GHCR, etc.).
 
@@ -1255,12 +1470,18 @@ A stack deploys a multi-service app from a `docker-compose.yml` in a Git reposit
 - `label` (string) - Display name; `name` (string) - codename seed (derived from the repo if omitted)
 - `new_project_description` (string) - description when creating a new project
 - `env_var_overrides` (object) - Values for required env vars, shaped `{ "<service>": { "<KEY>": "<value>" } }`
-- `auto_populate_required_vars` (boolean) - Random-fill any required env var left without a custom value (default `false`)
+- `auto_populate_required_vars` (boolean) - Fill any required env var left without a custom value (default `false`)
 
 **Discover-then-supply flow (handling env vars):**
 1. `POST /api/v1/stacks/analyze` with `{repository_url, branch, compose_path?}`. Each app/standalone service in the returned `manifest` has `env_vars: [{ key, value, required }]`.
 2. Required vars are those with `required: true` and a blank `value`. Ask the user whether each should be a **custom** value or **auto-populated** (good for secrets).
 3. `POST /api/v1/stacks` with custom values in `env_var_overrides` and/or `auto_populate_required_vars: true`. Managed services (databases/caches) are auto-configured — never supply env vars for them.
+
+**Derived variables:** some stacks declare a variable that must be computed from another rather than
+chosen freely — for example a Supabase `ANON_KEY` is a JWT signed with that stack's `JWT_SECRET`. The
+platform always computes those from their source, so a value you send for one in `env_var_overrides`
+is ignored. Supply the source variable (or let `auto_populate_required_vars` generate it) and the
+dependent values are derived to match.
 
 **Error responses to handle:**
 - `422 { "error": "Missing required environment variables: web.SECRET, ..." }` - a required var was neither supplied nor auto-populated; go back to step 2.
@@ -1464,7 +1685,7 @@ A standalone shared storage volume service.
 - `visibility` (string) - Bucket visibility: `"public_access"` or `"private_access"` (default: `"private_access"`)
 - `disk_size` (float) - Disk allocation in GiB (default: 0.1)
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "What should be the bucket's display name?"
 - "Which resource (Miget) should the bucket be attached to? (provide resource ID)"
 - "Should the bucket be public or private? (default: private)"
@@ -1684,7 +1905,7 @@ What would you like to set up?"
 **Optional:**
 - `components` (array) - Additional resource components (extra RAM, CPU, disk)
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "What plan type? (dev for development, pro for production)"
 - "What plan code name? (e.g., free, starter, professional)"
 - "Which region? (eu-east-1, us-east-1)"
@@ -1698,7 +1919,7 @@ What would you like to set up?"
 **Optional:**
 - `description` (string) - Brief description of the project's purpose
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "What should be the project name?"
 - "Do you want to add a description?"
 
@@ -1707,7 +1928,7 @@ What would you like to set up?"
 **Required fields:**
 - `domain.name` (string) - Fully qualified domain name (e.g., `"app.example.com"`)
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "What domain name should I add? (e.g., app.example.com)"
 
 ### Create App Environment Variable (`POST /api/v1/apps/{uuid}/vars`)
@@ -1716,7 +1937,7 @@ What would you like to set up?"
 - `key` (string) - Variable name (use SCREAMING_SNAKE_CASE, e.g., `DATABASE_URL`)
 - `value` (string) - Variable value
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "What's the variable name? (use SCREAMING_SNAKE_CASE)"
 - "What's the variable value?"
 
@@ -1739,7 +1960,7 @@ What would you like to set up?"
 - Updating a cronjob (`PUT`) only changes `label` and `command`. The **schedule cannot be changed in place** — to reschedule, DELETE the cronjob and create a new one.
 - Per-run logs are available via `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` (SSE) once the job has run at least once.
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "What should be the cronjob name?"
 - "What display label should I use?"
 - "What schedule type? (cron for custom expression, interval for predefined)"
@@ -1763,7 +1984,7 @@ What would you like to set up?"
 - Ports can be exposed publicly or made private after creation using separate endpoints
 - Port `5000` is fixed for HTTP traffic on the app's `*.migetapp.com` URL — it is auto-created, cannot be removed or changed, and the app must listen on it. Use this endpoint to add extra TCP/UDP ports for custom protocols; they are **private by default** — use `expose_publicly` to make them reachable from outside the cluster. See https://docs.miget.com/networking/ports for the full list of supported ports.
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "What internal port number? (1-65535)"
 - "What protocol? (tcp or udp)"
 - "Should this port be publicly accessible? (true/false)"
@@ -1784,7 +2005,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 
 **Response fields:** `uuid`, `name`, `registry`, `username`, `registry_hostname`, `created_at`, `updated_at` (the `token` is never returned).
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which registry provider? (docker_hub, github, gitlab, aws_ecr, azure, digitalocean, quay, generic)"
 - "What's the registry username and access token/password?"
 - "For generic/aws_ecr/azure registries: what's the registry hostname?"
@@ -1800,7 +2021,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - Application must be in deployable state
 - Requires `apps:deploy` permission
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which deployment should I rollback to? (provide deployment UUID)"
 
 ### Rotate Addon Password (`POST /api/v1/apps/{uuid}/addons/{id}/rotate_password`)
@@ -1814,7 +2035,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - Requires `apps:operate` permission
 - New password will be returned in response - you must update ENV variables manually
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which addon should I rotate the password for? (provide addon UUID)"
 
 ### Create Read Replica - App Addon (`POST /api/v1/apps/{uuid}/addons/{id}/create_replica`)
@@ -1833,7 +2054,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - Resource must have sufficient capacity for the replica
 - Requires `apps:operate` permission
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which PostgreSQL addon should I create a replica for? (provide addon UUID)"
 - "What CPU and RAM should the replica use? (defaults to primary's values)"
 
@@ -1848,7 +2069,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - Addon must be a replica (not a primary)
 - Requires `apps:operate` permission
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which replica should I promote to a standalone instance? (provide addon UUID)"
 
 ### Promote External Replica - App Addon (`POST /api/v1/apps/{uuid}/addons/{id}/promote_external`)
@@ -1864,7 +2085,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - Preserves current mode (standalone or cluster)
 - Requires `apps:operate` permission
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which external replica addon should I promote to a standalone instance? (provide addon UUID)"
 
 ### Create Read Replica - Service (`POST /api/v1/services/{id}/create_replica`)
@@ -1882,7 +2103,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - Resource must have sufficient capacity for the replica
 - Requires `services:operate` permission
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which PostgreSQL service should I create a replica for? (provide service ID)"
 - "What CPU and RAM should the replica use? (defaults to primary's values)"
 
@@ -1896,7 +2117,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - Service must be a replica (not a primary)
 - Requires `services:operate` permission
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which replica service should I promote to a standalone instance? (provide service ID)"
 
 ### Promote External Replica - Service (`POST /api/v1/services/{id}/promote_external`)
@@ -1911,7 +2132,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - Preserves current mode (standalone or cluster)
 - Requires `services:operate` permission
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Which external replica service should I promote to a standalone instance? (provide service ID)"
 
 ### Update Security Settings (`PUT /api/v1/apps/{uuid}/security`)
@@ -1921,7 +2142,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - At least one of the following optional fields must be provided
 
 **Optional fields:**
-- `allow_connections` (boolean) - Allow internal network connections from other Miget applications in this workspace
+- `allow_connections` (boolean) - Allow other applications on the same resource (miget) to connect to this app over the internal network
 - `basic_auth_enabled` (boolean) - Enable Basic Authentication for the application
 - `basic_auth_username` (string) - Username for Basic Authentication (required when `basic_auth_enabled` is true)
 - `basic_auth_password` (string) - Password for Basic Authentication (required when `basic_auth_enabled` is true, leave blank to keep current password)
@@ -1931,7 +2152,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - When `basic_auth_enabled` is true, both `basic_auth_username` and `basic_auth_password` are required (unless password already exists and you want to keep it)
 - The app response returns `basic_auth_enabled` so you can tell whether Basic Auth is enforced, but Basic Auth **credentials are never returned** by the API.
 
-**Example questions to ask:**
+**Ask only what you cannot derive:**
 - "Should I enable Basic Authentication? (true/false)"
 - "If enabling Basic Auth, what username should I use?"
 - "If enabling Basic Auth, what password should I use? (leave blank to keep current)"
