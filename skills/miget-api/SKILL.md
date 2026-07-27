@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.2.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.3.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -26,7 +26,7 @@ These are the platform's fixed rules. Most failed first deployments trace back t
 | **HTTP is always port 5000** | The app's public URL is served from port `5000`. It is created automatically, cannot be deleted, and no API parameter changes it. An app listening on 3000/8000/8080 will build and start, then never answer. Most frameworks read a `PORT` variable, so setting `PORT=5000` on the app is usually the whole fix; otherwise change the start command. |
 | **No implicit release phase** | Nothing runs between the build finishing and the new replicas starting. Database migrations belong in `pre_deploy_command` (`public_git` and `github` only), or they run on every replica boot. |
 | **Extra ports are private, and TCP/UDP only** | Additional ports default to private — pass `public: true` at creation or `PATCH .../expose_publicly` afterwards. They carry TCP/UDP, not HTTP. Port management is unavailable on the free plan (403). |
-| **App-to-app traffic is off by default** | `allow_connections` is `false` until set on the **destination** app (`PATCH /api/v1/apps/{uuid}/security_settings`). Until then it is not reachable at its `internal_url` from other apps on the same resource. |
+| **App-to-app traffic is off by default** | `allow_connections` is `false` until set on the **destination** app (`PUT /api/v1/apps/{uuid}/security`). Until then it is not reachable at its `internal_url` from other apps on the same resource. |
 | **Runtime logs and metrics are not on the REST API** | The REST API serves build/deploy logs and cron run logs only. Application logs and metrics come from the Loki/Prometheus APIs at `metrics.miget.com`, using the *same* `miget_live_` token and an `X-Workspace-Id` header — there is no separate Grafana credential. |
 | **Basic Auth credentials are never returned** | The app response tells you whether Basic Auth is on, never what the credentials are. Do not try to read them back. |
 | **`quota` is in bytes** | `quota.ram_size` is bytes (`134217728` = 128 MiB), `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields on the response. |
@@ -142,7 +142,7 @@ Before asking anything, read the repository. Most of a deployment plan is alread
 | `requirements.txt`, `pyproject.toml`, `Pipfile` | Python; read deps for `django`, `flask`, `fastapi` |
 | `Gemfile` + `config/database.yml` | Rails; the adapter in `database.yml` names the database it needs |
 | `go.mod` / `composer.json` / `Cargo.toml` / `pom.xml`, `build.gradle` | Go / PHP / Rust / JVM |
-| `prisma/schema.prisma` | Read `datasource.provider` → `postgres` or `mysql` addon |
+| `prisma/schema.prisma` | Read `datasource.provider` → `postgres` or `mysql` addon. Prisma migrations need `builder: "dockerfile"` — see Build Settings |
 | `drizzle.config.*`, `knexfile.*`, `alembic.ini`, `db/migrate/` | Migration tooling → set `pre_deploy_command` |
 | `ioredis`, `redis`, `redis-py`, `sidekiq`, `celery`, `bullmq` in deps | Needs a Valkey addon |
 | `.env.example`, `.env.local`, `.env.sample` | The variable **names** the app expects |
@@ -153,7 +153,7 @@ Before asking anything, read the repository. Most of a deployment plan is alread
 | A nested app directory, or `workspaces` in `package.json` | Monorepo → set `project_path` |
 | `.github/workflows/`, `Procfile`, `render.yaml`, `fly.toml`, `app.json` | Prior deployment intent — read it for build/start commands and env vars |
 
-**Report what you found, not that you looked.** "Next.js with Prisma pointing at PostgreSQL, migrations via `prisma migrate deploy`" is useful. "I have analysed your repository" is not.
+**Report what you found, not that you looked.** "Next.js with Drizzle pointing at PostgreSQL, migrations via `drizzle-kit migrate`" is useful. "I have analysed your repository" is not.
 
 **Handling `.env` files — read names, never expose values.**
 - Read `.env*` to learn which variables the app expects and to spot which look like secrets.
@@ -170,7 +170,7 @@ Derive these rather than asking. Read live values from `GET /api/v1/plans` and `
 
 **Resource.** Reuse an existing resource with enough free RAM before creating a new one — `GET /api/v1/resources`. A new resource is a new monthly charge; reusing one is free. When you do need a new one, pick the **cheapest plan from `GET /api/v1/plans` whose `ram_size` and `cpu_size` cover the app plus every addon you are about to attach**, with a little headroom — the app and its databases all draw on the same resource. Do not reach for a larger plan speculatively; resizing later is easy.
 
-**Always set `ram_size` and `cpu_size` explicitly.** If you omit them, the app is given *the entire remaining RAM and CPU of the resource*, leaving no room for anything else on it. This is the single most common way to quietly wedge an account. Values are in MiB and fractional cores; the floor for placing an app is 128 MiB.
+**Always set `ram_size` and `cpu_size` explicitly.** If you omit them, the app is given *the entire remaining RAM and CPU of the resource*, leaving no room for anything else on it. This is the single most common way to quietly wedge an account. Values are in MiB and fractional cores; the floor for placing an app is 128 MiB. **Mind the asymmetry:** sizes you *send* (`ram_size`, `disk_size` on create/update) are MiB/GiB, while sizes the API *returns* (`quota.*`, plan `ram_size`, resource `total_/available_*`) are bytes. Never compare a value you sent against one you read back without converting.
 
 | Workload | `ram_size` | `cpu_size` |
 |---|---|---|
@@ -209,8 +209,8 @@ Present exactly one of these before creating anything, then ask once.
 > | Resource | new, `Miget Hobby Tier 2` (1 core, 1 GiB) in `eu-east-1` | no existing resource in this workspace; 1 GiB fits the app plus the database |
 > | App | `acme-storefront`, builder `auto`, 512 MiB / 0.5 core | `package.json` → Next.js 15 |
 > | Deploy from | GitHub `acme/storefront`, branch `main` | current repo remote |
-> | Database | PostgreSQL addon | `prisma/schema.prisma` → `provider = "postgresql"` |
-> | Migrations | `pre_deploy_command: npx prisma migrate deploy` | Prisma migrations in `prisma/migrations/` |
+> | Database | PostgreSQL addon | `drizzle.config.ts` → `dialect: "postgresql"` |
+> | Migrations | `pre_deploy_command: npx drizzle-kit migrate` | migrations in `drizzle/` |
 > | Env vars | 6 imported from `.env.local`; `NEXTAUTH_SECRET` generated | — |
 > | **Cost** | **$7.00/month** | the resource plan; the addon draws on its capacity, not a separate charge |
 >
@@ -236,13 +236,13 @@ A correction using platform vocabulary shifts the register up for the rest of th
 
 The same moment, explanatory:
 
-> Your app needs somewhere to run, so I'll create a **resource** — a small slice of compute in Miget's `eu-east-1` region — and put the app on it. Prisma is pointing at PostgreSQL, so I'll attach a **Postgres addon**: a managed database whose connection string lands in your app's environment automatically, and whose lifecycle follows the app. Your migrations will run once before each release rather than on every restart.
+> Your app needs somewhere to run, so I'll create a **resource** — a small slice of compute in Miget's `eu-east-1` region — and put the app on it. Drizzle is pointing at PostgreSQL, so I'll attach a **Postgres addon**: a managed database whose connection string lands in your app's environment automatically, and whose lifecycle follows the app. Your migrations will run once before each release rather than on every restart.
 >
 > That comes to $7.00/month — the database runs inside the same resource, so it is not billed separately. Shall I go ahead?
 
 and terse:
 
-> `miget_hobby_2` in `eu-east-1`, app `acme-storefront` (builder `auto`, 512 MiB/0.5, GitHub `acme/storefront@main`), Postgres addon, `pre_deploy_command: npx prisma migrate deploy`, 6 vars from `.env.local`. $7/mo. Go?
+> `miget_hobby_2` in `eu-east-1`, app `acme-storefront` (builder `auto`, 512 MiB/0.5, GitHub `acme/storefront@main`), Postgres addon, `pre_deploy_command: npx drizzle-kit migrate`, 6 vars from `.env.local`. $7/mo. Go?
 
 **Register changes how much is explained. It never changes how much is done without asking.** Both versions above make the same decisions and both stop at the same single confirmation. Inverting that — acting more freely for users who seem inexperienced — would give the least oversight to the people least able to catch a mistake.
 
@@ -256,6 +256,14 @@ A deployment reaching `completed` means the image built and the pods started. It
 4. Work the table below.
 5. Fix and redeploy, or tell the user precisely what is wrong. Never report a deployment as successful without having checked the URL.
 
+**A failed deployment tells you nothing by itself.** `GET /api/v1/apps/{uuid}/deployments/{id}` returns `state: "failed"` and no reason — there is no error field, no failing phase, no exit code. The log body is the only source of truth, and the platform will not summarize it for you.
+
+So when a deployment fails, **fetch the logs and read them yourself** before you say anything beyond "it failed". Tell the user you are doing it and then do it — "The deployment failed. Let me pull the build logs and find out why." — rather than reporting the bare status and waiting, or pasting a log dump for them to read. What the user wants back is the cause and the fix, in a sentence or two, with the relevant few lines quoted. They asked you to deploy the app; diagnosing why it did not deploy is part of that job, not a follow-up request.
+
+Two things about the log body worth knowing before you read it:
+- **Logs 404 while the deployment is still running.** They are uploaded once the run ends, and `logs_stored_at` on the deployment turns non-null at that moment. Read the 404 body before giving up: *"Logs are not available yet"* means finish polling step 1 and retry, while *"Logs not found in storage"* means they aged out under the plan's retention window and are not coming back.
+- **It is one blob covering every phase.** Build output first, then `-----> Release`. A failure in the release phase is still labelled a build failure (see the table), so read to the end before concluding anything.
+
 | Symptom | Probe | Likely cause | Fix |
 |---------|-------|--------------|-----|
 | Deploy succeeded, URL times out or 502s | Runtime logs show the server listening on 3000/8080 | App is not on port 5000 | Make the app bind `5000` (usually `PORT`/`process.env.PORT`), redeploy |
@@ -263,6 +271,8 @@ A deployment reaching `completed` means the image built and the pods started. It
 | App 500s on every request touching data | Runtime logs show "relation does not exist" / "no such table" | Database never migrated | Set `pre_deploy_command`, redeploy |
 | Pod restarts repeatedly | Metrics show memory at the quota ceiling | Out of memory | Raise `ram_size` on the app, or reduce the app's footprint |
 | Build fails early | Build logs show a missing command or failed install | Build image lacks the tool, or the wrong builder | Check the builder, `build_command`, and `project_path` for monorepos |
+| Build fails with a missing module the app depends on | Build logs show the build step, not the install step, failing | `NODE_ENV=production` is set before `build_command`, so `npm ci` skipped `devDependencies` | Use `npm ci --include=dev && …` |
+| Deployment reads `Build failed: Release job failed` | The build log ends with `Built in …s` and an image push, then a `-----> Release` section | The **build succeeded**; `pre_deploy_command` failed | Read the release output at the **bottom** of the same log body — not the build section |
 | App reachable, but cannot reach another app | Target app's `allow_connections` is `false` | Internal traffic is off by default | Enable `allow_connections` on the target app |
 | A non-HTTP port refuses connections from outside | `GET /api/v1/apps/{uuid}/ports` shows it as private | Extra ports are private by default | Expose it publicly — see the ports endpoints |
 
@@ -377,6 +387,7 @@ A **Resource** (internally called "Miget") is a compute resource that provides C
 - Resources can have **components** (extra RAM, CPU, disk)
 - Resources can have **labels** (user-defined strings like "production", "staging", "sandbox" for identification)
 - Resources are region-specific
+- Resource capacity is reported as `total_ram_size` / `total_used_ram_size` / `available_ram_size` (and the `disk_size` equivalents) — all in **bytes**, the same unit as `quota.ram_size` on apps and `ram_size` on plans. `*_cpu_size` fields are fractional core counts. When you check whether a resource can host another app, compare bytes to bytes; treating these as MiB is the usual cause of "it should have fit".
 
 ### Applications (Apps)
 
@@ -397,7 +408,8 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - Apps can have **environment variables** (vars)
 - Apps can have **ports** (exposed ports). Port `5000` is fixed: HTTP traffic on the app's `*.migetapp.com` URL is always served from port `5000` — the app must listen on `5000`, and this port cannot be removed or changed. Additional TCP/UDP ports can be added for custom protocols; they are **private by default** and can be exposed publicly via the expose endpoint (see workflow 9, and https://docs.miget.com/networking/ports for the full list of supported ports).
 - Apps can be **public or private** (`private_access`): a private app has no public ingress and is reachable only inside the workspace network. Settable on create/update (default `false`); returned in the app response.
-- Apps have an **internal URL** for app-to-app and addon connections, returned as `internal_url` on the app response in the form `<service_name>.<resource-name>.<region-code>.migetapp.internal:5000` (null until a compute Resource is assigned). Traffic from other apps requires `allow_connections: true` on the **destination** app (default `false`, set via `PUT /apps/{uuid}/security`); once enabled, other applications on the same resource (miget) can reach it at its `internal_url`.
+- Apps have an **internal URL** for app-to-app and addon connections, returned as `internal_url` on the app response in the form `<service_name>.<resource-name>.<region-code>.migetapp.internal:5000`. Traffic from other apps requires `allow_connections: true` on the **destination** app (default `false`, set via `PUT /apps/{uuid}/security`); once enabled, other applications on the same resource (miget) can reach it at its `internal_url`.
+- Apps also have a **public URL**, returned as `public_url` on the app response in the form `https://<name>.<region-code>.migetapp.com`. The region comes from the compute resource the app runs on, and since `resource_id` is required at creation, every app has one. It is built from `name`, not `label` or `service_name` — and because the server appends a random suffix to `name` at creation, the only reliable way to learn an app's URL is to read `public_url` back from the response. An app with `private_access: true` has no public ingress, so its `public_url` will not answer. Custom domains are **not** included here; they are listed separately under `GET /apps/{uuid}/domains`, which returns `[]` for an app that only has its platform URL.
 - Resource limits are reported under `quota` on the app response: `quota.ram_size` is in **bytes** (e.g. `134217728` = 128 MiB) and `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields.
 - The app response also returns `basic_auth_enabled` (whether HTTP Basic Auth is enforced at the ingress). Basic Auth credentials are **never** returned by the API.
 - Every app automatically gets **monitoring** — Grafana dashboards, metrics, and logs, with Prometheus/Loki-compatible query APIs at `metrics.miget.com`. Runtime metrics and app logs are **not** on the REST API; see the Monitoring & Observability section.
@@ -465,14 +477,16 @@ Content-Type: application/json
   }
   ```
 
-  Multiple validation errors (422 responses from creation/update endpoints):
+  Validation errors (422 responses from app creation/update endpoints) use the
+  key `errors`, but the value is a **single comma-joined string**, not an array:
   ```json
   {
-    "errors": ["Field X is required", "Field Y is invalid"]
+    "errors": "Label is too long (maximum is 40 characters), Name is invalid"
   }
   ```
 
-  Parse both `error` (string) and `errors` (array) when handling error responses.
+  Handle both keys, and do not assume `errors` is iterable — treat it as a string
+  and split on `", "` only if you need the individual messages.
 
 ### Common HTTP Status Codes
 
@@ -496,10 +510,10 @@ All deployment methods follow the same initial steps: create a resource, create 
 
 ```http
 # Step 1: Create a resource (if needed)
+# Pick plan_code_name from GET /api/v1/plans — never invent one.
 POST /api/v1/resources
 {
-  "plan_type": "dev",
-  "plan_code_name": "starter",
+  "plan_code_name": "miget_hobby_0",
   "region_code": "eu-east-1"
 }
 
@@ -632,11 +646,23 @@ DELETE /api/v1/apps/{app-uuid}/vars
 # Create addon
 POST /api/v1/apps/{app-uuid}/addons
 {
-  "type": "postgres"
+  "type": "postgres",
+  "label": "Primary database",
+  "postgres_version": "17"
 }
 
-# The addon will be automatically configured with environment variables
-# like DATABASE_URL, DB_HOST, etc.
+# `label` and the type's version field are REQUIRED even though the API
+# marks them optional — omitting either returns 422.
+#
+# The addon injects exactly ONE variable into the app, named after the
+# addon itself: <ADDON_NAME>_URL, upcased with dashes turned into
+# underscores. A postgres addon named "postgres-mwvzq" yields
+# POSTGRES_MWVZQ_URL. There is no DATABASE_URL, DB_HOST, or any other
+# broken-out component. Read the addon's `name` from the create response
+# to derive the key, or list the app's vars with GET /apps/{uuid}/vars.
+#
+# If your framework expects DATABASE_URL, set it yourself as a second var
+# pointing at the same value.
 ```
 
 ### 5. Add Custom Domain
@@ -1123,7 +1149,7 @@ Stacks reuse `apps:*` permissions (read = `apps:view`, create/delete = `apps:man
 
 ### Plans, Regions & Components
 
-- `GET /api/v1/plans` - List available plans (plan types: `dev`, `pro`)
+- `GET /api/v1/plans` - List available plans. Each plan returns `code_name` (the opaque identifier you pass to `POST /api/v1/resources`), `plan_type` (`dev` for development/hobby, `pro` for production), `ram_size` and `disk_size` in **bytes**, `cpu_size` as a fractional core count, and `unit_price` in **cents**. Sizing note: `ram_size: 268435456` is 256 MiB, not 256 MB — compare it against `quota.ram_size` on apps, which uses the same unit.
 - `GET /api/v1/regions` - List available regions. Current regions: `eu-east-1` (Warsaw), `us-east-1` (Vint Hill)
 - `GET /api/v1/components` - List available resource components (extra_ram, extra_cpu, extra_disk)
 
@@ -1191,7 +1217,7 @@ This section lists what each endpoint needs. It is a schema reference, not an in
 ### Create Application (`POST /api/v1/apps`)
 
 **Required fields:**
-- `name` (string) - Unique service name (lowercase, alphanumeric with hyphens, used in URLs)
+- `name` (string) - Service name seed (lowercase, alphanumeric with hyphens). **The server appends a random suffix**, so the app you get back is named `my-api-x7k2p`, not `my-api`. Never build a URL from the name you sent — read `name` and `public_url` back from the create response. The unsuffixed form is kept separately as `service_name` and is what appears in `internal_url`. The suffix costs 6 characters and is applied *before* the 40-character limit is checked, so keep what you send to 34 characters or fewer — otherwise you get "Name is too long (maximum is 40 characters)" for a name that looked well under it.
 - `label` (string) - Human-readable display name
 - `project_id` (string) - UUID of the project to create the application in (get from `GET /api/v1/projects`)
 - `resource_id` (string) - UUID of the compute resource (Miget) to assign (get from `GET /api/v1/resources`). The app's region is derived from this resource.
@@ -1353,12 +1379,18 @@ To clear a field, send it as an empty string (`"pre_deploy_command": ""`). Note 
   "deployment_config": {
     "repository_url": "https://github.com/user/repo.git",
     "branch": "main",
-    "pre_deploy_command": "npx prisma migrate deploy"
+    "pre_deploy_command": "npx drizzle-kit migrate"
   }
 }
 ```
 
-Typical values: `npx prisma migrate deploy` (Prisma), `alembic upgrade head` (Alembic), `bin/rails db:migrate` (Rails), `python manage.py migrate` (Django). The other Git-based deployment methods have no equivalent field — for those, migrations have to run from the start command or a cronjob.
+Typical values: `npx drizzle-kit migrate` (Drizzle), `alembic upgrade head` (Alembic), `bin/rails db:migrate` (Rails), `python manage.py migrate` (Django). Prisma is the exception — see below. The other Git-based deployment methods have no equivalent field — for those, migrations have to run from the start command or a cronjob.
+
+**What the release phase can and cannot do.** `pre_deploy_command` runs in the runtime image as the unprivileged user `node`, with no package manager and no root. Nothing can be installed from it — `apt-get install …` fails with `Permission denied`. Write the command against what the image already ships.
+
+**Prisma specifically.** The default `auto` runtime image (`node:22.16.0-slim`) has no OpenSSL, which Prisma's migration engine requires. `npx prisma migrate deploy` reaches the database and then fails with `prisma:warn Prisma failed to detect the libssl/openssl version` followed by an empty `Error: Migration engine error:` and `Release failed`. There is no `pre_deploy_command` workaround (see above). For Prisma, use `builder: "dockerfile"` with a base image that includes OpenSSL, or run migrations from outside the platform.
+
+**`NODE_ENV` is `production` during the build.** The generated runtime Dockerfile exports it before `build_command` runs, so a plain `npm ci` skips `devDependencies` — any build needing a bundler or compiler then dies with a module-resolution error such as `Could not find Nx modules`. Use `npm ci --include=dev && npm run build` when the build needs dev dependencies.
 
 **Using `builder: "custom"`.** The `custom` builder needs `language` **and** `build_command` in `deployment_config`; without them the build has nothing to run, and the request is rejected with `422`. `run_command` is optional but usually wanted, since `custom` does not infer a start command:
 
@@ -1540,8 +1572,8 @@ An addon is attached to a specific application and its lifecycle is managed alon
 *   **Required:**
     *   `uuid` (string, in path): The UUID of the application to attach the addon to.
     *   `type` (string): The type of addon. Must be one of `postgres`, `mysql`, `valkey`, `storage`.
-*   **Optional:**
     *   `label` (string): A human-readable display name for the addon.
+*   **Optional:**
     *   `ram_size` (float): RAM allocation in MiB (e.g., 64, 128, 256).
     *   `disk_size` (float): Disk storage in GiB (e.g., 1, 5, 10).
     *   `cpu_size` (float): CPU allocation in cores (e.g., 0.1, 0.25, 0.5).
@@ -1552,8 +1584,8 @@ An addon is attached to a specific application and its lifecycle is managed alon
 
 A PostgreSQL database addon. Supports two creation modes: fresh database or external replica.
 
-*   **Type-specific Parameters (Optional):**
-    *   `postgres_version` (string): The major version of PostgreSQL (e.g., `'15'`, `'16'`, `'17'`).
+*   **Type-specific Parameters:**
+    *   `postgres_version` (string, **required**): The major version of PostgreSQL. Accepted values: `'18'`, `'17'`, `'16'`, `'15'`, `'14'`, `'13'`. Any other value is rejected with `400`.
     *   `public_access` (string): Enable public internet access. Use `'1'` for enabled, `'0'` for disabled.
     *   `instances` (integer): Number of database instances. Allowed values: `1` (standalone, default), `3`, `5`, or `7` for a High Availability cluster.
     *   `creation_mode` (string): `'fresh'` (new empty database, default) or `'external_replica'` (replica of an external PostgreSQL database).
@@ -1572,7 +1604,7 @@ A PostgreSQL database addon. Supports two creation modes: fresh database or exte
 
 **Example questions:**
 
-> "What version of PostgreSQL would you like? (e.g., 15, 16, 17)"
+> "What version of PostgreSQL would you like? (18, 17, 16, 15, 14 or 13)"
 > "Should this database be accessible from the public internet? (yes/no)"
 > "Do you want a standalone instance or a High Availability ha_cluster? (standalone/cluster)"
 > "Do you want to create a fresh database or replicate from an external PostgreSQL? (fresh/external_replica)"
@@ -1583,12 +1615,12 @@ A PostgreSQL database addon. Supports two creation modes: fresh database or exte
 
 A MySQL database addon.
 
-*   **Type-specific Parameters (Optional):**
-    *   `mysql_version` (string): The major version of MySQL (e.g., `'8.0'`, `'8.4'`).
+*   **Type-specific Parameters:**
+    *   `mysql_version` (string, **required**): The major version of MySQL. Accepted values: `'8.2'`, `'8.0'`. Any other value is rejected with `400`.
 
 **Example questions:**
 
-> "What version of MySQL would you like? (e.g., 8.0, 8.4)"
+> "What version of MySQL would you like? (8.2 or 8.0)"
 
 ---
 
@@ -1596,12 +1628,12 @@ A MySQL database addon.
 
 A Valkey (Redis-compatible) cache addon.
 
-*   **Type-specific Parameters (Optional):**
-    *   `valkey_version` (string): The version of Valkey (e.g., `'7.2'`).
+*   **Type-specific Parameters:**
+    *   `valkey_version` (string, **required**): The version of Valkey. Accepted values: `'7'`, `'7.2'`. Any other value is rejected with `400`.
 
 **Example questions:**
 
-> "What version of Valkey would you like? (e.g., 7.2)"
+> "What version of Valkey would you like? (7 or 7.2)"
 
 ---
 
@@ -1609,10 +1641,10 @@ A Valkey (Redis-compatible) cache addon.
 
 A persistent storage volume addon.
 
-*   **Type-specific Parameters (Optional):**
-    *   `mount_point` (string): The path inside the container where the volume should be mounted (e.g., `/data`).
-    *   `storage_access` (string): The access mode. Must be one of `RWO` (ReadWriteOnce) or `RWX` (ReadWriteMany).
-    *   `service_id` (integer): To attach an existing shared storage service, provide its ID.
+*   **Type-specific Parameters:**
+    *   `service_id` (integer): To attach an existing shared storage service, provide its ID. When given, `mount_point` and `storage_access` are inherited from that service — omit them.
+    *   `mount_point` (string, **required unless `service_id` is given**): The path inside the container where the volume should be mounted (e.g., `/data`).
+    *   `storage_access` (string, **required unless `service_id` is given**): The access mode. Must be one of `RWO` (ReadWriteOnce) or `RWX` (ReadWriteMany).
 
 **Example questions:**
 
@@ -1643,8 +1675,8 @@ A service is a standalone resource (e.g., database, shared storage) that can be 
 
 A standalone PostgreSQL database service. Supports two creation modes: fresh database or external replica.
 
-*   **Type-specific Parameters (Optional):**
-    *   `postgres_version` (string): The major version of PostgreSQL (e.g., `'15'`, `'16'`, `'17'`).
+*   **Type-specific Parameters:**
+    *   `postgres_version` (string, **required**): The major version of PostgreSQL. Accepted values: `'18'`, `'17'`, `'16'`, `'15'`, `'14'`, `'13'`. Any other value is rejected with `400`.
     *   `public_access` (string): Enable public internet access. Use `'1'` for enabled, `'0'` for disabled.
     *   `environment_variables` (boolean): If `true`, automatically injects connection variables into the parent application.
     *   `instances` (integer): Number of database instances. Allowed values: `1` (standalone, default), `3`, `5`, or `7` for a High Availability cluster.
@@ -1666,7 +1698,7 @@ A standalone PostgreSQL database service. Supports two creation modes: fresh dat
 
 > "Which project should this service belong to? (Please provide the Project UUID)"
 > "Which compute resource (Miget) should I provision this on? (Please provide the Miget UUID)"
-> "What version of PostgreSQL would you like? (e.g., 15, 16, 17)"
+> "What version of PostgreSQL would you like? (18, 17, 16, 15, 14 or 13)"
 > "Should this database be publicly accessible? (yes/no)"
 > "Do you want a standalone instance or a High Availability ha_cluster? (standalone/cluster)"
 > "Do you want to create a fresh database or replicate from an external PostgreSQL? (fresh/external_replica)"
@@ -1677,9 +1709,9 @@ A standalone PostgreSQL database service. Supports two creation modes: fresh dat
 
 A standalone shared storage volume service.
 
-*   **Type-specific Parameters (Optional):**
-    *   `mount_point` (string): The default mount path (e.g., `/shared-data`).
-    *   `storage_access` (string): The access mode. Must be one of `RWO` or `RWX`.
+*   **Type-specific Parameters:**
+    *   `mount_point` (string, **required**): The default mount path (e.g., `/shared-data`). Apps attaching to this service inherit it.
+    *   `storage_access` (string): Ignored — a shared storage service is always provisioned as `RWX`.
 
 **Example questions:**
 
@@ -1912,11 +1944,11 @@ What would you like to set up?"
 ### Create Resource (`POST /api/v1/resources`)
 
 **Required fields:**
-- `plan_type` (string) - Plan category: `"dev"` for development/hobby, `"pro"` for production
-- `plan_code_name` (string) - Specific plan identifier (e.g., `"free"`, `"starter"`, `"professional"`)
+- `plan_code_name` (string) - Plan identifier. **Do not guess it** — call `GET /api/v1/plans` and use a `code_name` from the response verbatim. Code names are opaque identifiers (e.g. `miget_hobby_0`, `miget_pro_1`), not friendly words like `"starter"` or `"professional"`, and they differ between environments. A wrong value returns a generic 422.
 - `region_code` (string) - Deployment region code. Available: `eu-east-1` (Warsaw), `us-east-1` (Vint Hill)
 
 **Optional:**
+- `plan_type` (string) - Ignored. The plan is resolved from `plan_code_name` alone; this field is accepted only for backward compatibility. Read `plan_type` off the plan object instead to tell `dev` and `pro` plans apart.
 - `components` (array) - Additional resource components (extra RAM, CPU, disk)
 
 **Ask only what you cannot derive:**
@@ -2386,11 +2418,10 @@ POST /api/v1/auth/sign_in
 
 # 2. Get or create resource
 GET /api/v1/resources
-# If none exists:
+# If none exists (plan_code_name comes from GET /api/v1/plans):
 POST /api/v1/resources
 {
-  "plan_type": "dev",
-  "plan_code_name": "starter",
+  "plan_code_name": "miget_hobby_0",
   "region_code": "eu-east-1"
 }
 
@@ -2427,10 +2458,12 @@ POST /api/v1/apps/{app-uuid}/vars
   "value": "production"
 }
 
-# 6. Add database addon
+# 6. Add database addon (label and postgres_version are required)
 POST /api/v1/apps/{app-uuid}/addons
 {
-  "type": "postgres"
+  "type": "postgres",
+  "label": "Primary database",
+  "postgres_version": "17"
 }
 
 # 7. Deploy (optional: specify commit_sha, branch, or custom_tag)
