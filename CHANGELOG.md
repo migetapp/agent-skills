@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-07-27
+
+Keep the user's credentials out of the agent. The setup flow previously had the agent ask for an API token in chat and write it into a shell config inline, which put a live secret into the conversation transcript and the user's shell history.
+
+- **The agent never sees the token:** it checks whether `MIGET_API_TOKEN` is set without printing it, and if it is missing, hands the user a snippet to run in their own terminal that prompts for the token without echoing it, appends it to their shell config and exports it for the current session. The instruction to "share the token back" is gone, along with the `echo 'export MIGET_API_TOKEN="..."'` snippets that placed a secret on a command line
+- **Reference the variable, not the value:** every example now sends `Authorization: Bearer $MIGET_API_TOKEN`, so a token value has no reason to appear in a command, a header example or a log
+- **Password authentication is no longer the headline method:** signing in with an account email and password was documented as Method 1, ahead of API tokens. It is now Method 2, marked as not for agents, and states why — it grants everything the account can do and cannot be revoked without a password reset. API tokens, which are individually revocable, are Method 1
+- **The end-to-end walkthrough no longer starts with a password:** it opens with the token header that the remaining requests carry, instead of a `POST /api/v1/auth/sign_in` carrying an email and password
+- **Secret hygiene covers more than the API token:** the handling rule now names Git tokens, registry credentials, addon connection strings and environment-variable values, and says to summarise a response body containing a secret rather than printing it
+- **If a token is pasted anyway:** the skill tells the agent to say so plainly and recommend rotating it, rather than silently carrying on
+
 ## 0.2.0 — 2026-07-27
 
 Rewrite the skill to deploy from what a project already says, document the Git build settings the API now accepts, and close the gaps that a full end-to-end deployment turned up — units, names, required fields and how to read a failure.

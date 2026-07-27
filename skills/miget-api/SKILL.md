@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.2.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.2.1` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -63,50 +63,58 @@ This replaces asking for region, plan, deployment method, addon type, RAM and CP
 
 Do these once, before your first API call.
 
-**1. Find the API token.** All API calls require authentication. Follow this sequence:
+**1. Find the API token.** All API calls require authentication. The token is a secret — your job is to get it into the environment, not to see it. Never ask the user to paste a token or a password into the conversation, and never put a token value on a command line you run: both end up in your transcript, and the second also lands in the user's shell history.
 
    **Step 1: Check environment variables.**
-   Look for `MIGET_API_TOKEN` in the user's shell environment (e.g., run `echo $MIGET_API_TOKEN`). If the variable is set and non-empty, use it as the `Authorization: Bearer` token for all API calls.
+   Check whether `MIGET_API_TOKEN` is set without printing it:
 
-   **Step 2: If no token is found, ask the user.**
-   Ask whether they already have a Miget account and an API token. Present these scenarios:
+   ```bash
+   [ -n "$MIGET_API_TOKEN" ] && echo "token set" || echo "token missing"
+   ```
 
-   - **"I have an API token"** - Ask them to provide it, then suggest storing it (see Step 4).
-   - **"I have an account but no token"** - Guide them to generate one:
+   If it is set, use it for every API call by *referencing the variable*, never by substituting its value:
+
+   ```bash
+   curl -H "Authorization: Bearer $MIGET_API_TOKEN" https://app.miget.com/api/v1/resources
+   ```
+
+   **Step 2: If no token is set, have the user install one.**
+   Ask which case applies and give them the matching instructions to run themselves:
+
+   - **"I have an API token"** - go straight to Step 3.
+   - **"I have an account but no token"** - guide them to generate one:
      1. Go to **https://app.miget.com/my_account#api_tokens**
      2. Click **"Create new token"**
      3. Give it a name (e.g., `cli-agent`)
-     4. Copy the token (it starts with `miget_live_`)
-     5. Share it back so you can proceed, then suggest storing it (see Step 4).
-   - **"I don't have an account"** - Direct them to sign up first:
+     4. Copy the token (it starts with `miget_live_`), then go to Step 3.
+   - **"I don't have an account"** - direct them to sign up first:
      1. Go to **https://app.miget.com/users/sign_up**
      2. Create an account and verify email
-     3. Once signed in, generate an API token at **https://app.miget.com/my_account#api_tokens**
-     4. Share the token back, then suggest storing it (see Step 4).
+     3. Once signed in, generate an API token at **https://app.miget.com/my_account#api_tokens**, then go to Step 3.
 
-   **Step 3: Do not proceed without a valid token.** Attempting API calls without authentication wastes time and confuses the user with 401 errors.
-
-   **Step 4: Suggest persisting the token in shell config.**
-   After receiving a token, recommend the user store it so it's available automatically in future sessions:
+   **Step 3: The user stores the token themselves.**
+   Give them the snippet for their shell and ask them to run it in their own terminal. It prompts for the token without echoing it, appends it to their shell config, and exports it into the current session — so the value never passes through you.
 
    For **zsh** (default on macOS):
-   ```bash
-   echo 'export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"' >> ~/.zshrc
-   source ~/.zshrc
+   ```zsh
+   read -rs "tok?Miget API token: " && printf 'export MIGET_API_TOKEN=%q\n' "$tok" >> ~/.zshrc && export MIGET_API_TOKEN="$tok" && unset tok
    ```
 
    For **bash**:
    ```bash
-   echo 'export MIGET_API_TOKEN="miget_live_xxxxxxxxxxxxx"' >> ~/.bashrc
-   source ~/.bashrc
+   read -rsp 'Miget API token: ' tok && printf 'export MIGET_API_TOKEN=%q\n' "$tok" >> ~/.bashrc && export MIGET_API_TOKEN="$tok" && unset tok
    ```
 
    For **fish**:
    ```fish
-   set -Ux MIGET_API_TOKEN "miget_live_xxxxxxxxxxxxx"
+   read --silent --prompt-str='Miget API token: ' tok; and set -Ux MIGET_API_TOKEN $tok; and set -e tok
    ```
 
-   Once stored, the token will be detected automatically in Step 1 on every future session.
+   Then ask them to restart the session (or tell you once the command has run) and repeat Step 1. Once stored, the token is detected automatically on every future session.
+
+   **Step 4: Do not proceed without a token.** Attempting API calls without authentication wastes time and confuses the user with 401 errors.
+
+   If the user pastes a token into the conversation anyway, tell them it is now in the transcript, use it for this session if they want to continue, and recommend they rotate it at **https://app.miget.com/my_account#api_tokens** afterwards.
 
 **2. Confirm this skill is current.** This API changes often, and a stale copy will describe fields that no longer match it. Once per session, alongside finding the token, fetch the latest published release and read its `tag_name`:
 
@@ -301,15 +309,35 @@ Two things about the log body worth knowing before you read it:
 
 **6. Run database migrations in `pre_deploy_command`.** Miget has no implicit release phase. For `public_git` and `github` apps, set `deployment_config.pre_deploy_command` so migrations run once before the new release starts — putting them in the start command runs them on every replica boot. See "Build Settings for `public_git` and `github`".
 
-**7. Store tokens securely.** Do not expose tokens in logs, error messages, or outputs shown to the user.
+**7. Never handle secrets in the clear.** Reference `$MIGET_API_TOKEN` instead of its value, and don't echo tokens into logs, error messages, commands, or anything shown to the user. The same applies to every other secret the platform hands you — Git tokens, registry credentials, addon connection strings and environment-variable values. If a response body contains one, summarise it rather than printing it.
 
 ---
 
 ## Authentication
 
-Miget API supports two authentication methods:
+Miget API supports two authentication methods. **If you are an agent, use Method 1.** Method 2 requires the user's account password and is documented only for interactive clients.
 
-### Method 1: Username/Password (JWT Tokens)
+### Method 1: API Token (use this)
+
+1. **Generate API token** in the web UI:
+   - Go to `https://app.miget.com/my_account#api_tokens`
+   - Create a new API token
+   - Copy the token (starts with `miget_live_` prefix)
+
+2. **Store it in `MIGET_API_TOKEN`** — see "Session Setup" for shell snippets that do this without exposing the value.
+
+3. **Use API token** in requests, referencing the variable rather than the value:
+   ```http
+   Authorization: Bearer $MIGET_API_TOKEN
+   ```
+
+   - API tokens don't expire (unless manually revoked)
+   - Scoped and individually revocable, so a leak is contained and traceable
+   - Better for long-running automation and CI/CD
+
+### Method 2: Username/Password (JWT Tokens) — not for agents
+
+This exchanges the user's **account password** for a short-lived JWT. It grants everything the account can do, and the password itself cannot be revoked without a reset. Do not collect, transmit, or store a user's password on their behalf — direct them to Method 1 instead. Documented here for completeness, and for interactive clients where the user types their own password.
 
 1. **Sign in** to get access and refresh tokens:
    ```http
@@ -347,23 +375,6 @@ Miget API supports two authentication methods:
      "refresh_token": "eyJhbGc..."
    }
    ```
-
-### Method 2: API Token (Recommended for Automation)
-
-1. **Generate API token** in the web UI:
-   - Go to `https://app.miget.com/my_account#api_tokens`
-   - Create a new API token
-   - Copy the token (starts with `miget_live_` prefix)
-
-2. **Use API token** in requests:
-   ```http
-   Authorization: Bearer miget_live_xxxxxxxxxxxxx
-   ```
-
-   - API tokens don't expire (unless manually revoked)
-   - Better for long-running automation and CI/CD
-
-**Recommendation:** For AI agents and automation, use API tokens as they don't expire and provide better security tracking. Store the token in the `MIGET_API_TOKEN` environment variable so it can be detected automatically.
 
 ---
 
@@ -460,7 +471,7 @@ All endpoints are under: `/api/v1/`
 ### Common Headers
 
 ```http
-Authorization: Bearer {token}
+Authorization: Bearer $MIGET_API_TOKEN
 X-Workspace-Id: {workspace-uuid}  # Optional, uses default if omitted
 Content-Type: application/json
 ```
@@ -2336,7 +2347,7 @@ Click **Monitoring** on an app's dashboard to open Grafana (automatic login — 
 
 ### Metrics API (Prometheus-compatible)
 
-Base URL `https://metrics.miget.com`. Auth: `Authorization: Bearer <miget_live_token>` — the **same Miget API token** you already use for the REST API (see Authentication); there is no separate Grafana credential. Scope with the `X-Workspace-Id: <workspace-uuid>` header. Query language: **PromQL**. Subject to fair-use rate limits (`429` on throttle).
+Base URL `https://metrics.miget.com`. Auth: `Authorization: Bearer $MIGET_API_TOKEN` — the **same Miget API token** you already use for the REST API (see Authentication); there is no separate Grafana credential. Scope with the `X-Workspace-Id: <workspace-uuid>` header. Query language: **PromQL**. Subject to fair-use rate limits (`429` on throttle).
 
 - Instant query: `GET /prometheus/api/v1/query?query=<PromQL>[&time=<ts>]`
 - Range query: `GET /prometheus/api/v1/query_range?query=<PromQL>&start=<ts>&end=<ts>&step=<e.g. 60s>`
@@ -2375,6 +2386,7 @@ Short-lived cron pods may fall between metric scrapes, so their `miget_instance_
 1. **Use API Tokens for Automation**
    - API tokens don't expire and are better for CI/CD and automation
    - Generate tokens at `https://app.miget.com/my_account#api_tokens`
+   - Read them from `MIGET_API_TOKEN` — never ask a user to paste a token or password into a conversation, and never write a token value into a command or config file on their behalf
 
 2. **Deployment Workflow**
    - Create resource -> Create project -> Create app -> Deploy
@@ -2416,13 +2428,8 @@ Short-lived cron pods may fall between metric scrapes, so their `miget_instance_
 ## Example: Complete Application Setup (GitHub)
 
 ```http
-# 1. Authenticate
-POST /api/v1/auth/sign_in
-{
-  "email": "user@example.com",
-  "password": "password"
-}
-# Save access_token
+# 1. Authenticate — every request below carries this header
+Authorization: Bearer $MIGET_API_TOKEN
 
 # 2. Get or create resource
 GET /api/v1/resources
