@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — 2026-07-27
+## 0.2.0 — 2026-07-27
 
 Rewrite the skill to deploy from what a project already says, document the Git build settings the API now accepts, and close the gaps that a full end-to-end deployment turned up — units, names, required fields and how to read a failure.
 
