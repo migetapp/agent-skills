@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.2.1` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.2.2` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -30,6 +30,10 @@ These are the platform's fixed rules. Most failed first deployments trace back t
 | **Runtime logs and metrics are not on the REST API** | The REST API serves build/deploy logs and cron run logs only. Application logs and metrics come from the Loki/Prometheus APIs at `metrics.miget.com`, using the *same* `miget_live_` token and an `X-Workspace-Id` header — there is no separate Grafana credential. |
 | **Basic Auth credentials are never returned** | The app response tells you whether Basic Auth is on, never what the credentials are. Do not try to read them back. |
 | **`quota` is in bytes** | `quota.ram_size` is bytes (`134217728` = 128 MiB), `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields on the response. |
+| **CPU is never the capacity constraint** | Placement and capacity are checked against **RAM and disk only** — CPU is not a quota and is never the reason an app or addon cannot be created. On dev plans (the free plan included) `cpu_size` is a *ceiling*, not a reservation: the **Miget Fair Scheduler** distributes the resource's CPU dynamically across every app and addon on it, so an idle process holds nothing back from a busy one. Guaranteed, dedicated CPU is a Pro-plan feature. Never tell a user that a database "will eat the CPU" of a small resource, and never refuse to co-locate an app and its database on that ground — decide on RAM. |
+| **A database addon injects two variables, not one** | A `postgres` or `mysql` addon sets **both** `<ADDON_NAME>_URL` (e.g. `POSTGRES_YZQUW_URL`) and `DATABASE_URL` to the same connection string; `valkey` sets `<ADDON_NAME>_URL` and `REDIS_URL`. The generic alias is skipped only if the app already has a variable of that name, which is never overwritten. Read `GET /api/v1/apps/{uuid}/vars` instead of guessing, and do not add a duplicate `DATABASE_URL` "because the framework needs one". |
+| **`name` is server-assigned and always suffixed** | The server appends a random suffix to whatever `name` you send — `wall` comes back as `wall-pfhqv`, and a resource is `migetmxq`. Apps, addons, services, stacks, buckets and secret files all work this way. **The suffixed `name` is the identifier everywhere**: public URLs, Git remote paths, connection variable keys. `service_name` (the unsuffixed form) appears in exactly one place, `internal_url`, and `label` is display text with no addressing role. Never reconstruct any of these from the name you sent, and never strip a suffix that looks like noise — read the field back and use it verbatim. |
+| **`state` mixes two vocabularies** | On apps, addons and services `state` reports the platform lifecycle while the object is provisioning and the raw **Kubernetes** status once it is up. There is no `active`, and a healthy database reports **`healthy`** (storage reports **`bound`**) — only an *app* reports `running`. Never poll for one hard-coded string; see "Reading `state`". |
 | **Addon vs standalone service** | An addon's lifecycle is tied to its app and is the right default — deleting the app deletes it. A standalone service outlives any single app. Note that explicit mounting works only for `shared_storage`; a shared database is shared by pointing several apps at its connection variables, not by mounting it. |
 | **A compose file means a Stack** | A repository with `docker-compose.yml` is a Stack, not an App, and uses an entirely different set of endpoints. Do not try to force it into a single app. |
 
@@ -160,6 +164,7 @@ Before asking anything, read the repository. Most of a deployment plan is alread
 | Code listening on `:3000`, `:8000`, `:8080` | Must serve on **5000** — see Platform Constraints |
 | A nested app directory, or `workspaces` in `package.json` | Monorepo → set `project_path` |
 | `.github/workflows/`, `Procfile`, `render.yaml`, `fly.toml`, `app.json` | Prior deployment intent — read it for build/start commands and env vars |
+| `git remote -v` | **Decides the deployment method** — a GitHub remote means `github`, another host means `public_git`, no remote at all means `git_push`. Check this before you plan; see "Choosing Defaults" |
 
 **Report what you found, not that you looked.** "Next.js with Drizzle pointing at PostgreSQL, migrations via `drizzle-kit migrate`" is useful. "I have analysed your repository" is not.
 
@@ -176,7 +181,7 @@ Derive these rather than asking. Read live values from `GET /api/v1/plans` and `
 
 **Region.** The platform has no default region. Prefer, in order: the region of a resource the user already owns; then the region implied by where they are (North America → `us-east-1`, everywhere else → `eu-east-1`, which is the same fallback the platform uses at signup). Say which you picked and offer to change it.
 
-**Resource.** Reuse an existing resource with enough free RAM before creating a new one — `GET /api/v1/resources`. A new resource is a new monthly charge; reusing one is free. When you do need a new one, pick the **cheapest plan from `GET /api/v1/plans` whose `ram_size` and `cpu_size` cover the app plus every addon you are about to attach**, with a little headroom — the app and its databases all draw on the same resource. Do not reach for a larger plan speculatively; resizing later is easy.
+**Resource.** Reuse an existing resource with enough free RAM before creating a new one — `GET /api/v1/resources`. A new resource is a new monthly charge; reusing one is free. When you do need a new one, pick the **cheapest plan from `GET /api/v1/plans` whose `ram_size` and `disk_size` cover the app plus every addon you are about to attach**, with a little headroom — the app and its databases all draw on the same resource. Size on RAM and disk only: CPU is not part of this arithmetic (see Platform Constraints). Do not reach for a larger plan speculatively; resizing later is easy.
 
 **Always set `ram_size` and `cpu_size` explicitly.** If you omit them, the app is given *the entire remaining RAM and CPU of the resource*, leaving no room for anything else on it. This is the single most common way to quietly wedge an account. Values are in MiB and fractional cores; the floor for placing an app is 128 MiB. **Mind the asymmetry:** sizes you *send* (`ram_size`, `disk_size` on create/update) are MiB/GiB, while sizes the API *returns* (`quota.*`, plan `ram_size`, resource `total_/available_*`) are bytes. Never compare a value you sent against one you read back without converting.
 
@@ -190,7 +195,19 @@ Derive these rather than asking. Read live values from `GET /api/v1/plans` and `
 | Rails | 512–1024 | 0.5 |
 | JVM (Spring Boot) | 1024+ | 1.0 |
 
-Treat these as starting points, not platform rules — raise them if the app is memory-hungry, and check them against the resource's free capacity before sending.
+Treat these as starting points, not platform rules — raise them if the app is memory-hungry, and check the **RAM** column against the resource's free capacity before sending. The `cpu_size` column is a ceiling the Fair Scheduler works under, not a slice carved out of the resource: the numbers may sum past the plan's core count without anything failing, and on a dev plan CPU does not cap replica counts either.
+
+**Deployment method.** Read it off the repository's own remote — `git remote -v` — rather than defaulting to `git_push`. `git_push` is the fallback for code that lives nowhere else, and it is the only method that ends with you asking the user to fetch a credential from the dashboard. Reaching for it while the repo sits on GitHub trades a working auto-deploy for a manual one.
+
+| What you found | Use | Why |
+|---|---|---|
+| A GitHub remote, or the user names a GitHub repo | `github` | The only method with **auto-deploy on push** and **review apps** for pull requests. Needs a `credential_id` from `GET /api/v1/git_credentials`; if the workspace has none, having the user install the Miget GitHub App once is a smaller ask than a token they must re-issue whenever it is lost. |
+| A remote on another host, or a public repo with no GitHub App | `public_git` | Deploys straight from the URL, no credential exchange. Private repos take a `credential_id`. |
+| The image is already built and pushed to a registry | `container_registry` | There is nothing left to build. |
+| A Dockerfile the user builds and ships themselves | `kamal` or `container_registry` | Their pipeline already produces the artifact. |
+| No remote at all — local-only code | `git_push` | The fallback. See the `git_push` notes for the SSH-first flow. |
+
+Review apps are configured in the dashboard, not over the API, and only for `github` apps — so a repo that will want PR previews should be on `github` from the start rather than migrated later.
 
 **Addons.** Their defaults are sensible; supply a size only when the app clearly needs more.
 
@@ -202,7 +219,9 @@ Treat these as starting points, not platform rules — raise them if the app is 
 
 Prefer an **addon** over a standalone service unless more than one app genuinely needs the same database.
 
-**The free plan.** One free resource per user, personal workspaces only, and it is small: 0.1 core, 256 MiB RAM, 1 GiB disk — so an app on it must fit inside 256 MiB. It also cannot use public custom ports, autoscaling, cron jobs, or Postgres backups, and addon CPU is pinned to 0.1 regardless of what you request. It suits a first deploy or a demo; say plainly when a project has outgrown it rather than trying to squeeze it in.
+**The free plan.** One free resource per user, personal workspaces only, and it is small: 0.1 core, 256 MiB RAM, 1 GiB disk — so the app **and every addon on it** must together fit inside 256 MiB of RAM and 1 GiB of disk. It also cannot use public custom ports, autoscaling, cron jobs, or Postgres backups, and addon CPU is pinned to 0.1 regardless of what you request. It suits a first deploy or a demo; say plainly when a project has outgrown it rather than trying to squeeze it in.
+
+**An app plus a database does fit on the free plan.** A 128 MiB app (the floor) and a Postgres addon at its 128 MiB default come to exactly 256 MiB, with the addon's 0.5 GiB disk inside the 1 GiB allowance. That is tight and worth saying out loud — no headroom to raise either later without upgrading — but it is a valid configuration and the platform will create it. The 0.1 core is *not* divided between them, so it is never the reason to refuse: if you push back on a free-plan Node + Postgres deploy, push back on the 256 MiB, not on the CPU.
 
 A free resource holding **no apps and no services** is deleted after 30 days of inactivity; one with an app on it is never auto-deleted. Deployed apps currently run continuously on every plan — nothing is idled or put to sleep. Treat that as today's behaviour rather than a promise, and do not build an argument for the free plan on guaranteed uptime.
 
@@ -284,6 +303,38 @@ Two things about the log body worth knowing before you read it:
 | App reachable, but cannot reach another app | Target app's `allow_connections` is `false` | Internal traffic is off by default | Enable `allow_connections` on the target app |
 | A non-HTTP port refuses connections from outside | `GET /api/v1/apps/{uuid}/ports` shows it as private | Extra ports are private by default | Expose it publicly — see the ports endpoints |
 
+
+### Reading `state` on an app, addon, or service
+
+**`state` is not one vocabulary.** For apps, addons and services the field is computed, not stored: while the object is still being provisioned it reports the platform's own lifecycle state, and once it is up it reports **whatever Kubernetes says**, downcased. The two sets barely overlap, and nothing in the response tells you which one you are looking at. Polling for a single hard-coded string is the most common way to hang forever.
+
+**There is no `active`, and a healthy database is not `running`.** A working Postgres, MySQL or Valkey addon reports **`healthy`**. A working storage addon reports **`bound`**. Only an *app* reports `running`.
+
+| Object | Provisioning / stopped | Up and healthy | Trouble |
+|---|---|---|---|
+| App | `pending`, `assigned`, `start_scheduled`, `started`, `deploying`, `cloning`, `stop_scheduled`, `restart_scheduled`, `stopped`, `blocked` | `running` | `failed`, `problem` (pods failing while replicas are still up) |
+| `postgres` / `mysql` / `valkey` addon or service | `pending`, `processing`, `creating`, `stopped` | **`healthy`**, or `running` | `failed`, `failing`, `degraded`, `degradated`, `crashloopbackoff` |
+| `storage` addon or service | `pending`, `processing`, `stopped` | **`bound`** | `failed`, `lost` |
+
+**Why a healthy addon sometimes says `running` instead of `healthy`.** The Kubernetes status is fetched live over the network and cached for ten seconds. When that call fails or returns nothing, the value falls back to the platform's lifecycle state — which for a working addon is `running`. Both answers mean the same thing. Treat them as equivalent rather than waiting for the "real" one to appear.
+
+**So test the set, never the string.** Wait on membership, and always give up eventually:
+
+```bash
+# Correct: any of these means the addon is usable.
+case "$state" in healthy|bound|running) echo up ;; esac
+```
+
+- **Ready:** `healthy`, `bound`, `running`, `active`
+- **Still working:** `pending`, `processing`, `creating`, `assigned`, `started`, `start_scheduled`, `deploying`, `cloning`
+- **Stop polling and report:** `failed`, `failing`, `lost`, `crashloopbackoff`, `problem`, `stopped`, `blocked`
+- **Anything else:** treat as still working, but bound the wait — an unrecognised value is not a reason to loop indefinitely.
+
+Two more things worth knowing before you build a wait loop on this field:
+
+- **`degraded` / `degradated` is not a failure.** A Postgres HA cluster reports it while a replica catches up; the primary is serving. Surface it, don't block on it.
+- **Stacks are different.** `GET /api/v1/stacks/{uuid}` returns a *normalised* state — `pending`, `validating`, `publishing`, `building`, `deploying`, `running`, `degraded`, `failed`, `stopped` — computed across the stack's items. Kubernetes vocabulary does not leak through there, so a stack really does settle on `running`.
+- **On a *deployment*, `running` means the opposite.** A deployment's `state` is its own small enum — `pending`, `running`, `completed`, `failed`, `cancelling`, `cancelled` — where `running` means *still building* and `completed` is the terminal success. Don't carry the app's reading of the word across to it.
 
 ### General Best Practices
 
@@ -665,15 +716,25 @@ POST /api/v1/apps/{app-uuid}/addons
 # `label` and the type's version field are REQUIRED even though the API
 # marks them optional — omitting either returns 422.
 #
-# The addon injects exactly ONE variable into the app, named after the
-# addon itself: <ADDON_NAME>_URL, upcased with dashes turned into
-# underscores. A postgres addon named "postgres-mwvzq" yields
-# POSTGRES_MWVZQ_URL. There is no DATABASE_URL, DB_HOST, or any other
-# broken-out component. Read the addon's `name` from the create response
-# to derive the key, or list the app's vars with GET /apps/{uuid}/vars.
+# The addon injects TWO variables into the app, both holding the same
+# connection string:
 #
-# If your framework expects DATABASE_URL, set it yourself as a second var
-# pointing at the same value.
+#   1. <ADDON_NAME>_URL — the addon's own name, upcased with dashes turned
+#      into underscores. A postgres addon named "postgres-mwvzq" yields
+#      POSTGRES_MWVZQ_URL.
+#   2. A generic alias — DATABASE_URL for postgres and mysql, REDIS_URL
+#      for valkey.
+#
+# The alias is created only when the app has no variable of that name yet
+# (compared case-insensitively). An existing DATABASE_URL is left alone,
+# so an app pointed at some other database keeps pointing at it.
+#
+# There are no broken-out components — no DB_HOST, DB_PORT, DB_USER.
+#
+# So a framework reading DATABASE_URL works with no extra step. Confirm
+# with GET /apps/{uuid}/vars rather than assuming either way, and do not
+# create a second DATABASE_URL — you would be duplicating a variable the
+# platform already set.
 ```
 
 ### 5. Add Custom Domain
@@ -790,7 +851,7 @@ POST /api/v1/services/{service-id}/create_replica
 - Replicas do **not** have their own ports or environment variables
 - Public access setting is inherited from the primary and cannot be changed independently - if the primary has public access enabled, the replica's `connection_details.external` will include external connection URLs
 - Deleting a primary automatically deletes all its replicas
-- Replica creation is asynchronous - poll the addon/service status to track provisioning
+- Replica creation is asynchronous - poll the addon/service `state` to track provisioning, testing it against the ready set in "Reading `state`" (`healthy`, `bound`, `running`) rather than a single string
 - Replicas can be promoted to standalone instances using the promote endpoint - this is irreversible and the promoted instance will no longer receive updates from the primary
 - The `create_replica` endpoint returns the full serialized replica entity (same shape as `GET /api/v1/apps/{uuid}/addons/{id}` or `GET /api/v1/services/{id}`), including `uuid`, `role: "replica"`, `primary_addon_uuid`, and `connection_details` - no follow-up `GET` is required to discover the new replica
 
@@ -1228,7 +1289,7 @@ This section lists what each endpoint needs. It is a schema reference, not an in
 ### Create Application (`POST /api/v1/apps`)
 
 **Required fields:**
-- `name` (string) - Service name seed (lowercase, alphanumeric with hyphens). **The server appends a random suffix**, so the app you get back is named `my-api-x7k2p`, not `my-api`. Never build a URL from the name you sent — read `name` and `public_url` back from the create response. The unsuffixed form is kept separately as `service_name` and is what appears in `internal_url`. The suffix costs 6 characters and is applied *before* the 40-character limit is checked, so keep what you send to 34 characters or fewer — otherwise you get "Name is too long (maximum is 40 characters)" for a name that looked well under it.
+- `name` (string) - Service name seed (lowercase, alphanumeric with hyphens). **The server appends a random suffix**, so the app you get back is named `my-api-x7k2p`, not `my-api`. Never build a URL or a Git remote from the name you sent — read `name` and `public_url` back from the create response. The unsuffixed form is kept separately as `service_name`, and `internal_url` is the **only** place it is used; every other identifier — `public_url`, the `git_push` repository path, the addon's `<ADDON_NAME>_URL` key — is built from the suffixed `name`. Reaching for `service_name` anywhere else produces a path that does not resolve. The suffix costs 6 characters and is applied *before* the 40-character limit is checked, so keep what you send to 34 characters or fewer — otherwise you get "Name is too long (maximum is 40 characters)" for a name that looked well under it.
 - `label` (string) - Human-readable display name
 - `project_id` (string) - UUID of the project to create the application in (get from `GET /api/v1/projects`)
 - `resource_id` (string) - UUID of the compute resource (Miget) to assign (get from `GET /api/v1/resources`). The app's region is derived from this resource.
@@ -1263,37 +1324,50 @@ Each `deployment_method` requires different fields in `deployment_config`:
 | `dockerfile_path` | string | `"./Dockerfile"` | Path to Dockerfile in the repository |
 | `build_context` | string | `"."` | Docker build context directory |
 
-**Helping the user deploy a `git_push` app.** The API does not expose the Git token value, so after the app is created you must walk the user through pushing from their machine:
+**Before you choose `git_push` at all.** It is the method for code with no remote. If the repository already has one, `github` or `public_git` deploys from it with no credential handling, and `github` additionally gives auto-deploy and review apps — see "Choosing Defaults". Check `git remote -v` first.
 
-1. **Get a token.** Direct the user to their app's Git Tokens settings page to view (or create) a token:
+**Helping the user deploy a `git_push` app — SSH first.** There are two ways to authenticate, and they are not equally convenient. **Prefer SSH.** It uses the SSH key already on the user's account, needs no Git token, and every step is doable over the API. Fall back to HTTPS only when SSH genuinely will not work.
 
-   `https://app.miget.com/apps/{APP_UUID}/settings#git_tokens`
+*Read `region.code`, `miget.name`, and `name` from `GET /api/v1/apps/{uuid}` — both remote URLs are built from them, verbatim.* **The repository path is the app's `name`, with its random suffix — `wall-pfhqv`, not `wall`.** Do not substitute `service_name` or `label`, and do not strip the suffix because it looks like noise: `service_name` is the unsuffixed form and belongs to `internal_url` only. Pushing to the unsuffixed path fails to authenticate against a repository that does not exist. The resource segment is likewise `miget.name` as returned (`migetmxq`), never the resource's display label.
 
-   - For the auto-created default token, the Git **username** is the resource (miget) name and the **password** is the token value.
-   - For any additional token the user creates, the **username** is the token's name and the **password** is the token value.
-   - A token can only be viewed once — if it says "Token already seen", the user must create a new one on that page.
+**Option A — SSH (default).**
 
-2. **Build the remote URL.** The remote is region-specific: `https://git.{region_code}.miget.io/{miget_name}/{app_name}` (for example, `https://git.eu-east-1.miget.io/my-resource/my-app`). You can read `region.code`, `miget.name`, and `name` from `GET /api/v1/apps/{uuid}`.
+1. **Check the account for a key:** `GET /api/v1/users/me/ssh_keys`. If one is registered, there is nothing to set up — go to step 3.
+2. **If the list is empty, register one.** A public key is not a secret, so you can read the user's own and send it: look for `~/.ssh/id_ed25519.pub` (or `id_rsa.pub`), and `POST /api/v1/users/me/ssh_keys` with `{"public_key": "ssh-ed25519 AAAA... user@host"}`. If they have no key pair at all, have them run `ssh-keygen -t ed25519` themselves, then read the `.pub` file. **Never read, print, or send the private key** — it is the file *without* the `.pub` suffix.
+3. **Add the remote and push:**
 
-3. **Guide the user through the push.**
-
-   New repository:
    ```bash
-   git init
    git config push.autoSetupRemote true
-   git remote add miget https://git.{region_code}.miget.io/{miget_name}/{app_name}
-   git add .
-   git commit -a -m "initial"
+   # Both segments come from the API response: {miget.name} and {name}.
+   git remote add miget git@ssh.{region.code}.migetapp.com:{miget.name}/{name}.git
    git push miget
    ```
 
-   Existing repository:
+   A filled-in example, so the shape is unambiguous:
+
    ```bash
-   git remote add miget https://git.{region_code}.miget.io/{miget_name}/{app_name}
+   git remote add miget git@ssh.eu-east-1.migetapp.com:migetmxq/wall-pfhqv.git
+   ```
+
+**Option B — HTTPS with a Git token.** Git tokens are not on the API in any form — they cannot be listed, read, or created through it — so this route always ends in the dashboard. Use it only if SSH is unavailable (a network that blocks port 22, or a user who cannot add a key).
+
+1. Send the user to `https://app.miget.com/apps/{APP_UUID}/settings#git_tokens` to reveal or create a token.
+   - Default token: the **username** is the resource (miget) name, the **password** is the token value.
+   - Any token the user adds: the **username** is the token's name, the **password** is the token value.
+   - A token is viewable exactly once. "Token already seen" means it is gone for good and they must create a new one — revoking the default token disables HTTPS deploys entirely.
+2. Add the remote and push:
+
+   ```bash
+   git config push.autoSetupRemote true
+   git remote add miget https://git.{region.code}.miget.io/{miget.name}/{name}
    git push miget
    ```
 
-   When git prompts for credentials, use the username/password from step 1. The push triggers a build and deploy — monitor it via `GET /api/v1/apps/{uuid}/deployments` (see workflow 2).
+   Git prompts for the username and password from step 1. Note the host differs from the SSH one: HTTPS is `git.{region}.miget.io`, SSH is `ssh.{region}.migetapp.com`. The path segments are the same suffixed `name` and `miget.name` as the SSH remote.
+
+**For a directory that is not yet a repository**, prefix either option with `git init`, `git add .`, and `git commit -m "initial"`.
+
+Either way, the push triggers a build and deploy — monitor it via `GET /api/v1/apps/{uuid}/deployments` (see workflow 2).
 
 **`public_git`** - Deploy from a public Git repository URL.
 
@@ -1595,7 +1669,9 @@ An addon is attached to a specific application and its lifecycle is managed alon
 *   **Optional:**
     *   `ram_size` (float): RAM allocation in MiB (e.g., 64, 128, 256).
     *   `disk_size` (float): Disk storage in GiB (e.g., 1, 5, 10).
-    *   `cpu_size` (float): CPU allocation in cores (e.g., 0.1, 0.25, 0.5).
+    *   `cpu_size` (float): CPU allocation in cores (e.g., 0.1, 0.25, 0.5). A ceiling, not a reservation — and ignored on dev plans, where it is pinned to `0.1`.
+
+**Connection variables.** Creating a `postgres`, `mysql`, or `valkey` addon writes **two** variables to the app, both set to the same connection string: `<ADDON_NAME>_URL`, and a generic alias — `DATABASE_URL` for `postgres`/`mysql`, `REDIS_URL` for `valkey`. The alias is skipped when the app already has a variable of that name (case-insensitive), and an existing one is never overwritten. Verify with `GET /api/v1/apps/{uuid}/vars` after creating the addon.
 
 ---
 
@@ -1697,7 +1773,7 @@ A standalone PostgreSQL database service. Supports two creation modes: fresh dat
 *   **Type-specific Parameters:**
     *   `postgres_version` (string, **required**): The major version of PostgreSQL. Accepted values: `'18'`, `'17'`, `'16'`, `'15'`, `'14'`, `'13'`. Any other value is rejected with `400`.
     *   `public_access` (string): Enable public internet access. Use `'1'` for enabled, `'0'` for disabled.
-    *   `environment_variables` (boolean): If `true`, automatically injects connection variables into the parent application.
+    *   `environment_variables` (boolean): If `true`, writes the connection variables to the **project** the service belongs to — `<SERVICE_NAME>_URL` and `DATABASE_URL` — so every app in that project inherits them. An existing project variable of the same name is not overwritten.
     *   `instances` (integer): Number of database instances. Allowed values: `1` (standalone, default), `3`, `5`, or `7` for a High Availability cluster.
     *   `creation_mode` (string): `'fresh'` (new empty database, default) or `'external_replica'` (replica of an external PostgreSQL database).
 
