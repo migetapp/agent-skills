@@ -975,7 +975,7 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `PUT /api/v1/apps/{uuid}/security` - Update security settings (network connectivity, Basic Authentication)
 - `PATCH /api/v1/apps/{uuid}/state` - Change app state (schedule_start/schedule_stop/schedule_restart)
 - `POST /api/v1/apps/{uuid}/clone` - Clone an application (copy env vars, secret files, scaling, health checks, addons, cronjobs)
-- `PUT /api/v1/apps/{uuid}/deployment` - Update deployment method and configuration (switch methods, update Kamal SSH keys)
+- `PUT /api/v1/apps/{uuid}/deployment` - Update deployment method and configuration (switch methods, update Kamal SSH keys). `deployment_config_attributes` is a **patch**: fields you omit keep their stored value, and a field sent as `""` is cleared. Sending a *different* `deployment_method` builds the config from scratch, so supply every field that method needs.
 - `POST /api/v1/apps/{uuid}/deploy` - Trigger deployment (optional: custom_tag, commit_sha, branch). Not used for Kamal apps. Returns `409 Conflict` if a deployment is already in progress — poll `GET /apps/{uuid}/deployments` and retry once it settles.
 - `PUT /api/v1/apps/{uuid}/health_checks` - Update health check probes (liveness, readiness, startup)
 - `PUT /api/v1/apps/{uuid}/scaling_profile` - Update scaling profile (replicas, auto-scaling, thresholds). Not available on free plan.
@@ -1329,7 +1329,21 @@ Each `deployment_method` requires different fields in `deployment_config`:
 
 #### Build Settings for `public_git` and `github`
 
-The two Git-based methods share a set of build fields. They are also accepted on `PUT /api/v1/apps/{uuid}/deployment` under `deployment_config_attributes`.
+The two Git-based methods share a set of build fields. They are also accepted on `PUT /api/v1/apps/{uuid}/deployment` under `deployment_config_attributes`, where they behave as a patch — see **Adding a build setting to an existing app** below.
+
+**Adding a build setting to an existing app.** Send the app's current `deployment_method` plus only the fields you want to change; everything you leave out is preserved. To add migrations to a live app you do not have to restate its branch, project path, or commands:
+
+```json
+{
+  "deployment_method": "public_git",
+  "deployment_config_attributes": {
+    "repository_url": "https://github.com/user/repo.git",
+    "pre_deploy_command": "bin/rails db:migrate"
+  }
+}
+```
+
+To clear a field, send it as an empty string (`"pre_deploy_command": ""`). Note that `repository_url` (for `public_git`) and `repository` + `credential_id` (for `github`) must be present on every request even when unchanged.
 
 **Running database migrations.** Miget has no implicit release phase — nothing runs between the build finishing and the new replicas starting. Put migrations in `pre_deploy_command` so they run **once** before the new release goes live, rather than in the start command where every replica would run them on boot:
 
@@ -1346,7 +1360,7 @@ The two Git-based methods share a set of build fields. They are also accepted on
 
 Typical values: `npx prisma migrate deploy` (Prisma), `alembic upgrade head` (Alembic), `bin/rails db:migrate` (Rails), `python manage.py migrate` (Django). The other Git-based deployment methods have no equivalent field — for those, migrations have to run from the start command or a cronjob.
 
-**Using `builder: "custom"`.** The `custom` builder needs `language` **and** `build_command` in `deployment_config`; without them the build has nothing to run. `run_command` is optional but usually wanted, since `custom` does not infer a start command:
+**Using `builder: "custom"`.** The `custom` builder needs `language` **and** `build_command` in `deployment_config`; without them the build has nothing to run, and the request is rejected with `422`. `run_command` is optional but usually wanted, since `custom` does not infer a start command:
 
 ```json
 {
