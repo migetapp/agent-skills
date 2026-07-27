@@ -1319,6 +1319,14 @@ Each `deployment_method` requires different fields in `deployment_config`:
 - **Rejected:** SSH URLs (`git@github.com:owner/repo.git`), plain `http://`, a host with a port, and extra path depth such as GitLab subgroups (`host/group/subgroup/repo`) — the check expects exactly host + owner + repo. If the user gives an SSH or browser URL, convert it to the `https://<host>/<owner>/<repo>` form before sending.
 - The repo **and** the `branch` must be publicly reachable: on create the platform verifies the repository is accessible and the branch exists. A private repository without a `credential_id`, or a non-existent branch, fails validation. For a private repo, pass a `credential_id` (see Git Credentials).
 
+Three failures come back from that reachability check, and they mean different things — do not treat them all as a bad URL:
+
+| Message | What it means | What to do |
+|---|---|---|
+| `The repository or branch does not exist.` | The repo is private, the URL is wrong, or the branch name is wrong | Fix the URL or branch, or pass a `credential_id` |
+| `The repository host rate limit was exceeded. Please try again later.` | The Git host is throttling the platform — **the URL is fine** | Wait and retry; do not "correct" a URL that was already right |
+| `The branch '<name>' has no commits.` | The branch exists but is empty | Push a commit, or point `branch` at one that has history |
+
 **`github`** - Deploy from a GitHub repository using the Miget GitHub App integration.
 
 ```json
