@@ -607,7 +607,8 @@ from the archive are removed.
    if they have none) and add it with `POST /api/v1/users/me/ssh_keys`. Do not send a
    private key, and do not generate a key without telling them.
 4. Read `deployment_config.sftp_username` and the site's `region` from
-   `GET /api/v1/static/{uuid}`, then connect:
+   `GET /api/v1/static/{uuid}`, then connect (`deployment_config.sftp_endpoint` carries the
+   same `user@host` target ready-made):
 
 ```bash
 sftp {sftp_username}@ssh.{region}.migetapp.com
@@ -1403,6 +1404,14 @@ and the fixed content source are the two things that trip up a first attempt.
   1 GB) for a `zip` site; omit it to rebuild a `github` site. Returns `409 Conflict` while
   a deployment is in flight
 - `GET /api/v1/static/{uuid}/deployments` - Deployment history
+- `POST /api/v1/static/{uuid}/deployments/{id}/cancel` - Cancel a running build. Only a
+  `git_push` or `github` site has a build to cancel; a `zip` or `sftp` deployment is a
+  direct sync with nothing to stop
+- `POST /api/v1/static/{uuid}/deployments/{id}/rollback` - Rebuild and republish the site
+  from the commit that deployment shipped. **`github` only** — a static site produces no
+  image, so this is a fresh build of that commit rather than a redeploy of a stored
+  artifact. A `git_push` site is rebuilt by pushing, and `zip`/`sftp` deployments carry no
+  commit; both return `422`
 - `GET /api/v1/static/{uuid}/files` - Browse the deployed content, one directory level per
   call (`prefix`, `limit`, `cursor`). Read-only — deploy to change content. Returns `422`
   while the site's storage is still being provisioned
