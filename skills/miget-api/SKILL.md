@@ -179,7 +179,7 @@ Before asking anything, read the repository. Most of a deployment plan is alread
 
 Derive these rather than asking. Read live values from `GET /api/v1/plans` and `GET /api/v1/regions` — never quote a price from memory.
 
-**Region.** The platform has no default region. Prefer, in order: the region of a resource the user already owns; then the region implied by where they are (North America → `us-east-1`, everywhere else → `eu-east-1`, which is the same fallback the platform uses at signup). Say which you picked and offer to change it.
+**Region.** The platform has no default region. Prefer, in order: the region of a resource the user already owns; then the region implied by where they are (North America → `us-east-1`, everywhere else → `eu-east-1`, which is the same fallback the platform uses at signup). Say which you picked and offer to change it. This does not apply to static sites, which accept `eu-east-1` only — see "Static Sites".
 
 **Resource.** Reuse an existing resource with enough free RAM before creating a new one — `GET /api/v1/resources`. A new resource is a new monthly charge; reusing one is free. When you do need a new one, pick the **cheapest plan from `GET /api/v1/plans` whose `ram_size` and `disk_size` cover the app plus every addon you are about to attach**, with a little headroom — the app and its databases all draw on the same resource. Size on RAM and disk only: CPU is not part of this arithmetic (see Platform Constraints). Do not reach for a larger plan speculatively; resizing later is easy.
 
@@ -520,13 +520,18 @@ A **static site** hosts prebuilt HTML, CSS and JavaScript from object storage. I
 endpoints under `/api/v1/static`. There is no compute resource, no replicas, no ports
 and no environment variables, and it costs nothing to run.
 
-Two things differ from applications and will bite you if you assume otherwise:
+Three things differ from applications and will bite you if you assume otherwise:
 
 - **The name is exact and globally unique.** No random suffix is appended, so the name
   you send is the name the site is served under: `https://{name}.static.onmiget.com`.
   A taken name is a `422`, not a silent rename. Pick something specific.
 - **The content source is fixed at creation.** It decides what gets provisioned, so it
   cannot be changed later. To switch sources, create another site.
+- **`region` accepts `eu-east-1` only.** It is where the content is stored; serving is
+  region-less, so a site is equally fast everywhere regardless. Omit it and you get
+  `eu-east-1`. Sending anything else — including `us-east-1`, which is a valid region
+  for every other resource — is rejected with `400`, so do not carry the region you
+  picked for the user's apps over to their static site.
 
 There are four sources, in two families:
 
@@ -1207,7 +1212,7 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `PATCH /api/v1/apps/{uuid}/state` - Change app state (schedule_start/schedule_stop/schedule_restart)
 - `POST /api/v1/apps/{uuid}/clone` - Clone an application. Copies nothing by default beyond the app's own settings — env vars, secret files, scaling, health checks, security, add-ons and cronjobs are each opt-in. See the runbook under Endpoint Reference
 - `PUT /api/v1/apps/{uuid}/deployment` - Update deployment method and configuration (switch methods, update Kamal SSH keys). `deployment_config_attributes` is a **patch**: fields you omit keep their stored value, and a field sent as `""` is cleared. Sending a *different* `deployment_method` builds the config from scratch, so supply every field that method needs.
-- `POST /api/v1/apps/{uuid}/deploy` - Trigger deployment (optional: custom_tag, commit_sha, branch). Not used for Kamal apps. Returns `409 Conflict` if a deployment is already in progress — poll `GET /apps/{uuid}/deployments` and retry once it settles.
+- `POST /api/v1/apps/{uuid}/deploy` - Trigger deployment (optional: custom_tag, commit_sha, branch). Not used for Kamal apps. Returns `409 Conflict` if a deployment is already in progress — poll `GET /apps/{uuid}/deployments` and retry once it settles. A `commit_sha` that does not exist in the configured repository is rejected with `422` before any build starts, so push the commit first and pass a SHA from the same repository the app is configured with (a SHA from a fork or a squashed/force-pushed branch will not resolve).
 - `PUT /api/v1/apps/{uuid}/health_checks` - Update health check probes (liveness, readiness, startup)
 - `PUT /api/v1/apps/{uuid}/scaling_profile` - Update scaling profile (replicas, auto-scaling, thresholds). Not available on free plan.
 - `GET /api/v1/apps/{uuid}/deployments` - List deployments
