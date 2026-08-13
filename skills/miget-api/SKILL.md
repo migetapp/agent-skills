@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.5.1` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.6.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -35,6 +35,7 @@ These are the platform's fixed rules. Most failed first deployments trace back t
 | **`name` is server-assigned and always suffixed** | The server appends a random suffix to whatever `name` you send — `wall` comes back as `wall-pfhqv`, and a resource is `migetmxq`. Apps, addons, services, stacks, buckets and secret files all work this way. **The suffixed `name` is the identifier everywhere**: public URLs, Git remote paths, connection variable keys. `service_name` (the unsuffixed form) appears in exactly one place, `internal_url`, and `label` is display text with no addressing role. Never reconstruct any of these from the name you sent, and never strip a suffix that looks like noise — read the field back and use it verbatim. |
 | **`state` mixes two vocabularies** | On apps, addons and services `state` reports the platform lifecycle while the object is provisioning and the raw **Kubernetes** status once it is up. There is no `active`, and a healthy database reports **`healthy`** (storage reports **`bound`**) — only an *app* reports `running`. Never poll for one hard-coded string; see "Reading `state`". |
 | **Addon vs standalone service** | An addon's lifecycle is tied to its app and is the right default — deleting the app deletes it. A standalone service outlives any single app. Note that explicit mounting works only for `shared_storage`; a shared database is shared by pointing several apps at its connection variables, not by mounting it. |
+| **Billing is not on the API — and deleting is not cancelling** | There is no endpoint that cancels a subscription, changes a plan's payment, suspends or deletes a workspace. Those are dashboard-only, on purpose. The trap is `DELETE /api/v1/resources/{uuid}`: it destroys the resource and everything on it, but the **subscription keeps charging** for the workspace plan and any other resource. Deleting things over the API never stops a bill. Send the user to the dashboard — see "Stopping the bill". |
 | **A compose file means a Stack** | A repository with `docker-compose.yml` is a Stack, not an App, and uses an entirely different set of endpoints. Do not try to force it into a single app. |
 
 ---
@@ -207,7 +208,7 @@ Treat these as starting points, not platform rules — raise them if the app is 
 | A Dockerfile the user builds and ships themselves | `kamal` or `container_registry` | Their pipeline already produces the artifact. |
 | No remote at all — local-only code | `git_push` | The fallback. See the `git_push` notes for the SSH-first flow. |
 
-Review apps are configured in the dashboard, not over the API, and only for `github` apps — so a repo that will want PR previews should be on `github` from the start rather than migrated later.
+Preview environments (review apps) work only for `github` apps — so a repo that will want PR previews should be on `github` from the start rather than migrated later. You configure them over the API with `PUT /api/v1/apps/{uuid}/preview_environments/config`; the environments themselves are created by GitHub webhooks, never by you.
 
 **Addons.** Their defaults are sensible; supply a size only when the app clearly needs more.
 
@@ -446,6 +447,28 @@ Miget uses **workspace-based multi-tenancy**. Each user can belong to multiple w
   X-Workspace-Id: {workspace-uuid}
   ```
 
+### Stopping the bill
+
+**None of this is on the API, and you must not try to approximate it by deleting things.** When a user wants to stop paying, downgrade, leave, or wind a workspace down, your job is to tell them exactly where to click and what will happen — then stop.
+
+| What the user wants | Where they go | What it does |
+|---|---|---|
+| Stop paying entirely | **Billing** in the sidebar → **Cancel Subscription** on the subscription card | Charges stop now. Everything keeps running until the end of the paid period, then the resources and all their applications, services, buckets and databases are **permanently deleted**. Resumable from the same page until that date. |
+| Stop paying, **enterprise workspace** | Their account manager, or support@miget.com | There is no cancel button on an enterprise plan and no endpoint behind it — notice period, final invoice and data handover follow the signed agreement. Billing shows an "Ending your contract" note instead. Do not tell an enterprise user to look for a Cancel button; they will not find one. |
+| Drop one resource, keep the rest | **Resources** → pick it → **Settings** → **Delete** | Deletes that resource and everything on it, and takes it off the bill. The subscription continues for the workspace plan and any other resources. |
+| Change plan | **Settings** → **Plan** | |
+| Remove the workspace | **Settings** → **Delete** | Owner only — the tab is not shown to anyone else. Revokes the subscription immediately with no refund for the remaining period, and deletes every project and application. The last remaining workspace cannot be deleted. |
+| Payment method or invoices | **Billing** → **Update Payment Methods** | Opens the payment provider's portal. |
+
+Two things to warn about, because a user will not expect either:
+
+- **Deleting applications does not reduce the bill.** Billing is per resource — the capacity applications run on — not per application. An empty resource costs exactly what a full one does. This is the single most common billing surprise, so say it before the user starts deleting apps to save money.
+- **Cancelling ends in deletion, not in a frozen account.** A cancelled workspace is suspended and its workloads stopped, and the resources are then destroyed. Tell the user to export anything they want to keep — there is no undo once it happens.
+
+A workspace can also be **suspended** by the platform — after a cancellation completes, for non-payment, or when an application is blocked for abuse. It is a consequence, never something a user or an agent triggers, and there is no endpoint to lift it.
+
+While suspended, **every** API request for that workspace answers `403`, reads included, with one of two messages: `Your workspace has been suspended. Please contact support to reactivate it.` or, when an application was blocked, `...due to suspicious activity in one of your applications...`. Treat either as terminal — do not retry, do not switch endpoints, and do not report it as a permission problem the user can fix by changing a role. Relay which of the two it was, since they need different people: billing for the first, support for the second.
+
 ### Resources (Migets)
 
 A **Resource** (internally called "Miget") is a compute resource that provides CPU, RAM, and disk space. Resources are assigned to applications and services.
@@ -495,8 +518,7 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - **Ownership can be changed on every kind; placement cannot.** Send `project_id` to `PUT /apps/{uuid}`, `PUT /services/{id}`, `PUT /stacks/{uuid}`, `PUT /static_sites/{uuid}` or `PUT /buckets/{uuid}` to move a workload between projects — it keeps running on the same resource throughout. Moving a stack moves every application and service in it. There is no way to move a workload to a different resource; that requires deleting and recreating it
 - Because the resource cannot change, a move is refused with **422** when the resource is assigned to projects that do not include the destination. The way through is to assign the resource to the destination project as well, not to pick a different resource
 - A `project_id` that does not exist — or that exists but you cannot reach — is a **404** carrying `{"error": "Project not found"}`, on every one of those endpoints. Those two cases answer identically on purpose: a status code that told them apart would confirm that a restricted project is there. Read this 404 as "the destination could not be resolved", never as "the workload is gone" — the workload is untouched and still in its original project. Re-read `GET /api/v1/projects` to see which destinations you may actually use
-- Projects can have **project-level environment variables** (shared across apps)
-- Projects can have **project secret files** (shared files)
+- Projects can have **project-level environment variables** and **project secret files**, shared across the apps in the project. Neither is automatic: an app receives them only while its own `project_variables_enabled` / `project_files_enabled` toggle is on. Both are managed over the API — see "Project Environment Variables" and "Project Secret Files"
 - Projects can have **assigned resources**, returned as `resources` on the project response. An empty list means the project simply uses the shared pool — which it may do even when it has assignments. The same relationship reads from the other side as `assigned` and `project_ids` on the resource response, which is the cheaper check when you are choosing a resource
 - A project can also be **restricted** to specific people, returned as `restrictions` on the project response. An empty list means the project is open to the whole workspace; any entry closes it to everyone but the listed members, everyone holding a listed role, the workspace owner and holders of the **built-in `admin` role**. A custom role never bypasses a restriction, whatever permissions it carries — including `workspace:members`. Restricting projects is available on organization and enterprise workspaces only, and that plan refusal is checked **before** the subject you passed, so on a smaller plan you get the plan message even when the email is also wrong
 - **A project you cannot reach simply does not appear.** It is absent from `GET /api/v1/projects`, and so are its applications, services, stacks and buckets in their own listings; addressing any of them by UUID returns **404**, not 403. So a short project list is not proof that the workspace holds nothing else — it is what you are allowed to see. The same is true of resources assigned solely to projects you cannot reach; an unassigned resource stays visible to everyone, because any project may deploy on it.
@@ -1252,7 +1274,7 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `GET /api/v1/resources/{uuid}` - Get resource details
 - `PUT /api/v1/resources/{uuid}` - Update resource (change plan, add components)
 - `PATCH /api/v1/resources/{uuid}/labels` - Update resource labels
-- `DELETE /api/v1/resources/{uuid}` - Delete resource
+- `DELETE /api/v1/resources/{uuid}` - Delete the resource and everything on it — applications, services, buckets, stacks — permanently. Takes that resource off the bill; **does not cancel the subscription**, which continues for the workspace plan and any other resources. There is no endpoint that cancels a subscription; see "Stopping the bill"
 
 ### Projects
 
@@ -1274,6 +1296,16 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `PUT /api/v1/projects/{project_id}/vars` - Update project environment variable
 - `DELETE /api/v1/projects/{project_id}/vars` - Delete project environment variable
 
+### Project Secret Files
+
+Shared across every app in the project that has project secret files enabled. Same write-only rule as app secret files. **Creating one changes nothing for an app until that app's `project_files_enabled` toggle is on** — the parallel of `project_variables_enabled` for env vars.
+
+- `GET /api/v1/projects/{project_id}/secret_files` - List project secret files (metadata only)
+- `POST /api/v1/projects/{project_id}/secret_files` - Create one (body: `filename`, `text`). Returns the server-assigned `name`
+- `GET /api/v1/projects/{project_id}/secret_files/{name}` - Get one file's metadata
+- `PUT /api/v1/projects/{project_id}/secret_files/{name}` - Update `filename`, `text`, or both. At least one is required
+- `DELETE /api/v1/projects/{project_id}/secret_files/{name}` - Remove it
+
 ### App Domains
 
 - `GET /api/v1/apps/{uuid}/domains` - List app domains
@@ -1287,8 +1319,35 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 
 - `GET /api/v1/apps/{uuid}/vars` - List app variables
 - `POST /api/v1/apps/{uuid}/vars` - Create variable
-- `PUT /api/v1/apps/{uuid}/vars` - Update variable (identified by `key` in body)
+- `PUT /api/v1/apps/{uuid}/vars` - Update variable (identified by `key` in body). Optionally carries `project_variables_enabled` alongside the change
 - `DELETE /api/v1/apps/{uuid}/vars` - Delete variable (identified by `key` in body)
+- `PUT /api/v1/apps/{uuid}/vars/project_variables_enabled` - Toggle whether the app also receives its **project's** variables (body: `enabled`). Use this to flip the switch on its own; the app's own variables are untouched
+
+### App Secret Files
+
+For config a container needs **on disk** rather than in the environment — `serviceAccount.json`, `.npmrc`, certificates, a `config.yaml`. Reach for these when the content is multi-line, is a file format, or is what a library expects at a path.
+
+**`text` is write-only.** You send it; no endpoint ever returns it. Contents are encrypted at rest, so plan for the fact that you cannot read a file back to diff it — keep the source of truth on your side. The **server assigns `name`** on creation (suffixed, like every other Miget name); that `name` is the identifier for the show, update and delete endpoints. Changes reach running containers on the **next deployment**, not immediately.
+
+- `GET /api/v1/apps/{uuid}/secret_files` - List the app's own secret files (metadata only). Project-level files inherited by this app are **not** included; read those from the project endpoint
+- `POST /api/v1/apps/{uuid}/secret_files` - Create one (body: `filename`, `text`). `filename` is the in-container path and must be unique within the app; a duplicate is a **422**. Returns **201** with the assigned `name`
+- `GET /api/v1/apps/{uuid}/secret_files/{name}` - Get one file's metadata
+- `PUT /api/v1/apps/{uuid}/secret_files/{name}` - Update `filename`, `text`, or both. Omitted fields keep their value; sending neither is a **400**
+- `DELETE /api/v1/apps/{uuid}/secret_files/{name}` - Remove it
+- `PUT /api/v1/apps/{uuid}/secret_files/project_files_enabled` - Toggle whether the app also mounts its **project's** secret files (body: `enabled`). Creating a project secret file does nothing for an app until this is on
+
+### App Preview Environments
+
+Ephemeral clones of an app, one per GitHub pull request or branch. **Only for `github` apps**, and **never for stack-managed apps** — those return **403** with `Preview environments are not available for stack-managed applications.`
+
+**There is no create endpoint.** Environments appear when GitHub webhooks fire against a config whose triggers match. Your job is the config; the platform does the rest.
+
+- `GET /api/v1/apps/{uuid}/preview_environments` - List, newest first. Optional `status` filter: `creating`, `active`, `updating`, `failed`, `destroying`. Each entry carries `app_uuid` and `url` of the cloned app, plus the `branch` and `commit_sha` it runs
+- `GET /api/v1/apps/{uuid}/preview_environments/{id}` - Get one. `{id}` is the numeric `id` from the list, not a UUID
+- `DELETE /api/v1/apps/{uuid}/preview_environments/{id}` - Schedule teardown. Returns **202**; the entry stays listed as `destroying` until it finishes
+- `POST /api/v1/apps/{uuid}/preview_environments/{id}/redeploy` - Redeploy the commit it already tracks. Returns **202**. Use it to retry a `failed` environment — new commits deploy on their own while `auto_deploy_on_push` is on
+- `GET /api/v1/apps/{uuid}/preview_environments/config` - Read the config. **404 when the app has never been configured** — that is the normal empty state, not an error; PUT to create it
+- `PUT /api/v1/apps/{uuid}/preview_environments/config` - Create the config the first time, update it after. Omitted fields keep their value
 
 ### App Addons
 
@@ -2387,6 +2446,48 @@ What would you like to set up?"
 **Ask only what you cannot derive:**
 - "What's the variable name? (use SCREAMING_SNAKE_CASE)"
 - "What's the variable value?"
+
+### Create App Secret File (`POST /api/v1/apps/{uuid}/secret_files`)
+
+Same body for the project-level endpoint, `POST /api/v1/projects/{project_id}/secret_files`.
+
+**Required fields:**
+- `filename` (string) - Path the file is mounted at inside the container, e.g. `/app/config/service-account.json`. Unique within the app
+- `text` (string) - File contents. Encrypted at rest and never returned by any endpoint
+
+**Ask only what you cannot derive:** you usually know both from the file the user pointed at — read the path and the contents rather than asking. Confirm the in-container path when it differs from where the file sits locally.
+
+**Read back the `name`** from the response and store it; it is the only handle for updating or deleting the file later, and you cannot re-derive it from `filename`.
+
+### Set Preview Environment Config (`PUT /api/v1/apps/{uuid}/preview_environments/config`)
+
+No field is required — the first PUT creates the config, filling anything you omit with the defaults below.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Create preview environments for this app |
+| `resource_mode` | string | `parent` | `parent` reuses the app's resource; `existing` requires `resource_id` |
+| `resource_id` | string | — | Resource **UUID** preview environments run on. Required when `resource_mode` is `existing` |
+| `project_id` | string | — | Project **UUID** they land in. Omit to follow the parent app |
+| `trigger_mode` | string | `pull_request` | `pull_request` (one per PR) or `every_branch` (one per pushed branch) |
+| `trigger_filter` | string | `auto` | Which PRs qualify: `auto` (all non-draft), `label`, `branch_pattern`, `pr_name_pattern` |
+| `trigger_label` | string | — | PR label that triggers creation. Required when `trigger_filter` is `label` |
+| `branch_pattern` | string | — | Glob against the branch name, e.g. `feature/*`. Required when `trigger_filter` is `branch_pattern` |
+| `pr_name_pattern` | string | — | Glob against the PR title, e.g. `feat:*`. Required when `trigger_filter` is `pr_name_pattern` |
+| `auto_deploy_on_push` | boolean | `true` | Redeploy on every push to the tracked branch |
+| `cleanup_on_pr_merge` | boolean | `true` | Destroy when the PR is merged |
+| `cleanup_on_pr_close` | boolean | `false` | Destroy when the PR is closed unmerged |
+| `cleanup_on_branch_delete` | boolean | `false` | Destroy when the branch is deleted |
+| `cleanup_on_inactivity` | boolean | `false` | Destroy after `inactivity_days` without a commit |
+| `inactivity_days` | integer | `14` | Days without a commit before cleanup |
+| `retention_days` | integer | `7` | Days kept before expiry |
+| `retention_mode` | string | `after_pr_close` | Count retention from PR close, or `from_creation` |
+| `comment_on_github` | boolean | `true` | Post the environment URL as a PR comment. Forced off in `every_branch` mode |
+| `clone_settings` | object | `{}` | What is copied from the parent app |
+
+**`clone_settings` reads as "everything unless told otherwise".** `clone_variables`, `clone_secret_files` and `clone_security` are treated as `true` when absent, so you only ever set them to `false`. An absent or empty `addons`/`cronjobs` key means *clone them all*; supplying either narrows to what you list.
+
+A pattern or label the filter requires but that you leave empty is a **422**, so send `trigger_filter` and its companion field together.
 
 ### Create App Cronjob (`POST /api/v1/apps/{uuid}/cronjobs`)
 
