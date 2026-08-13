@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.5.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.5.1` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -382,9 +382,14 @@ Miget API supports two authentication methods. **If you are an agent, use Method
    Authorization: Bearer $MIGET_API_TOKEN
    ```
 
-   - API tokens don't expire (unless manually revoked)
+   - An API token expires only if it was given an expiry date; otherwise it runs until revoked
    - Scoped and individually revocable, so a leak is contained and traceable
    - Better for long-running automation and CI/CD
+
+   There are **two kinds**, and which one you hold changes what the API answers:
+
+   - A **user token** is created at `https://app.miget.com/my_account#api_tokens` and acts as its owner, carrying their role in whichever workspace the request targets.
+   - A **workspace token** is created in workspace settings under Developers, and acts for that one workspace. It carries its own permission list and its own project list — neither the creator's role nor workspace ownership widens it. Three refusals follow from that, and none of them mean the token is broken: an `X-Workspace-Id` naming a different workspace answers **403**, `/api/v1/users/me` and everything under it answers **403**, and any workspace administration endpoint is simply not grantable to it. If you hit these, you are holding a workspace token and the request needs a different credential, not a retry.
 
 ### Method 2: Username/Password (JWT Tokens) — not for agents
 
@@ -2831,8 +2836,8 @@ Short-lived cron pods may fall between metric scrapes, so their `miget_instance_
 ## Best Practices
 
 1. **Use API Tokens for Automation**
-   - API tokens don't expire and are better for CI/CD and automation
-   - Generate tokens at `https://app.miget.com/my_account#api_tokens`
+   - API tokens are better for CI/CD and automation; they expire only if given an expiry date
+   - Generate a user token at `https://app.miget.com/my_account#api_tokens`, or a workspace token in workspace settings under Developers
    - Read them from `MIGET_API_TOKEN` — never ask a user to paste a token or password into a conversation, and never write a token value into a command or config file on their behalf
 
 2. **Deployment Workflow**

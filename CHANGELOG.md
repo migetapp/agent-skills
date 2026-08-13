@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 — 2026-08-13
+
+Describe the two kinds of API token, so that a `403` an agent cannot explain stops looking like a broken credential.
+
+- **A workspace token is not a user token with fewer permissions:** it acts for one workspace, carries its own permission and project lists, and neither the role of whoever created it nor workspace ownership widens it. The skill now says which kind is created where, and what each one carries into a request
+- **Three refusals are named as expected behaviour, not failure:** an `X-Workspace-Id` naming a different workspace answers `403`, `/api/v1/users/me` and everything under it answers `403`, and workspace administration is never grantable to a token at all. An agent meeting one of these needs a different credential, not a retry — and previously had nothing in the skill to reach that conclusion from
+- **"API tokens don't expire" was only half true:** a token expires when it is given an expiry date, and workspace tokens required one until now. The claim is corrected in both places it appeared, including the Best Practices section an agent reads when choosing how to authenticate
+
 ## 0.5.0 — 2026-08-13
 
 Document how a workspace is partitioned — resources assigned to projects, projects closed to part of the team — and what both do to an agent that reads the API. Between them they change what "the workspace" means: a listing is now what you are allowed to see, not what exists, and a resource that looks free may refuse the app you are about to create on it.
