@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.4.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.5.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -450,6 +450,11 @@ A **Resource** (internally called "Miget") is a compute resource that provides C
 - Resources can have **labels** (user-defined strings like "production", "staging", "sandbox" for identification)
 - Resources are region-specific
 - Resource capacity is reported as `total_ram_size` / `total_used_ram_size` / `available_ram_size` (and the `disk_size` equivalents) — all in **bytes**, the same unit as `quota.ram_size` on apps and `ram_size` on plans. `*_cpu_size` fields are fractional core counts. When you check whether a resource can host another app, compare bytes to bytes; treating these as MiB is the usual cause of "it should have fit".
+- A resource is a fixed-capacity compute unit that hosts as many workloads as fit. It is **not** one-per-app, and by default it is not owned by any project
+- A resource can be **assigned** to one or more projects (`POST /api/v1/projects/{project_id}/resources`). Once assigned, only those projects may place workloads on it; anything else is refused with **422**. Assigning restricts the **resource**, never the project — a project can always use any unassigned resource, whether or not it has assignments of its own. `GET /api/v1/projects/{project_id}` lists a project's assigned resources under `resources`
+- Every resource reports its own assignments as `assigned` (a boolean) plus `project_ids` — an array of project UUIDs. `assigned: false` means nobody has assigned it and any project may deploy on it. `project_ids` lists the projects it is assigned to that **you can access**; a resource assigned solely to projects you cannot access is not returned to you at all, so you will not see it in `GET /api/v1/resources` and cannot address it by UUID
+- **Resource selection can be refused.** Before offering a `resource_id`, read `assigned` and `project_ids`: the resource is usable when `assigned` is false, or when `project_ids` contains the target project's UUID. Prefer a resource assigned to the target project, then an unassigned one. A 422 mentioning an assignment means the resource is closed to that project — pick another one, or assign it to the project first
+- **Assigning is itself refused while the resource still runs workloads the assignment would lock out.** The 422 names the blocking projects with their workload counts — except that it **redacts every project you cannot reach**, reporting only how many there are. Send `with_hosting_projects: true` on `POST /api/v1/projects/{project_id}/resources` to assign the resource to those projects too and let the call through; it only ever widens access, and every workload already there stays where it is. When a blocker is redacted this flag is the *only* way forward, because you cannot name a project you cannot see — do not retry the bare call and do not report the assignment as impossible
 
 ### Applications (Apps)
 
@@ -480,14 +485,23 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 
 **Projects** are logical groupings of apps and services.
 
+- A project holds applications, static sites, services, stacks and buckets. Applications, static sites, services and stacks always belong to exactly one project; buckets may belong to one
+- Ownership (which project a workload belongs to) and placement (which resource it runs on) are separate. Static sites sit on no resource at all
+- **Ownership can be changed on every kind; placement cannot.** Send `project_id` to `PUT /apps/{uuid}`, `PUT /services/{id}`, `PUT /stacks/{uuid}`, `PUT /static_sites/{uuid}` or `PUT /buckets/{uuid}` to move a workload between projects — it keeps running on the same resource throughout. Moving a stack moves every application and service in it. There is no way to move a workload to a different resource; that requires deleting and recreating it
+- Because the resource cannot change, a move is refused with **422** when the resource is assigned to projects that do not include the destination. The way through is to assign the resource to the destination project as well, not to pick a different resource
+- A `project_id` that does not exist — or that exists but you cannot reach — is a **404** carrying `{"error": "Project not found"}`, on every one of those endpoints. Those two cases answer identically on purpose: a status code that told them apart would confirm that a restricted project is there. Read this 404 as "the destination could not be resolved", never as "the workload is gone" — the workload is untouched and still in its original project. Re-read `GET /api/v1/projects` to see which destinations you may actually use
 - Projects can have **project-level environment variables** (shared across apps)
 - Projects can have **project secret files** (shared files)
+- Projects can have **assigned resources**, returned as `resources` on the project response. An empty list means the project simply uses the shared pool — which it may do even when it has assignments. The same relationship reads from the other side as `assigned` and `project_ids` on the resource response, which is the cheaper check when you are choosing a resource
+- A project can also be **restricted** to specific people, returned as `restrictions` on the project response. An empty list means the project is open to the whole workspace; any entry closes it to everyone but the listed members, everyone holding a listed role, the workspace owner and holders of the **built-in `admin` role**. A custom role never bypasses a restriction, whatever permissions it carries — including `workspace:members`. Restricting projects is available on organization and enterprise workspaces only, and that plan refusal is checked **before** the subject you passed, so on a smaller plan you get the plan message even when the email is also wrong
+- **A project you cannot reach simply does not appear.** It is absent from `GET /api/v1/projects`, and so are its applications, services, stacks and buckets in their own listings; addressing any of them by UUID returns **404**, not 403. So a short project list is not proof that the workspace holds nothing else — it is what you are allowed to see. The same is true of resources assigned solely to projects you cannot reach; an unassigned resource stays visible to everyone, because any project may deploy on it.
 
 ### Buckets
 
 A **Bucket** is an S3-compatible object storage container.
 
 - Buckets are attached to a **Resource** (Miget) for quota management
+- Buckets may belong to a **Project**, but the field is optional — a bucket with no project stays at workspace level. It is never inferred: omit `project_id` and the bucket is unassigned, even when the workspace has exactly one project. A bucket without a project satisfies no assignment, so it cannot be created on — or left sitting on — an assigned resource
 - Buckets can be **public** or **private** visibility
 - Buckets have **S3 credentials** (access key / secret key) returned in the `GET /api/v1/buckets/{uuid}` response - use these for direct S3 API access via any S3-compatible client
 - Buckets support **policies** (S3-compatible JSON bucket policies)
@@ -899,6 +913,7 @@ POST /api/v1/buckets
 {
   "label": "My Assets Bucket",
   "resource_id": "01H...resource-uuid...",
+  "project_id": "01H...project-uuid...",
   "visibility": "private_access",
   "disk_size": 1.0
 }
@@ -930,6 +945,12 @@ PUT /api/v1/buckets/{bucket-uuid}
   "label": "Updated Label",
   "visibility": "public_access",
   "disk_size": 5.0
+}
+
+# Move the bucket to another project, or send null to unassign it
+PUT /api/v1/buckets/{bucket-uuid}
+{
+  "project_id": "01H...project-uuid..."
 }
 
 # Delete a bucket
@@ -1236,6 +1257,10 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `PUT /api/v1/projects/{project_id}` - Update project
 - `DELETE /api/v1/projects/{project_id}` - Delete project
 - `GET /api/v1/projects/{project_id}/apps` - List applications in project
+- `POST /api/v1/projects/{project_id}/resources` - Assign a resource to the project (body: `resource_id`, optional `with_hosting_projects`). Needs **both** `projects:manage` and `resources:manage`, because assigning narrows who may use the resource. Refused with **422** while the resource still runs workloads the assignment would lock out — pass `with_hosting_projects: true` to assign it to those projects as well instead of being refused
+- `DELETE /api/v1/projects/{project_id}/resources/{resource_id}` - Remove the assignment, returning the resource to the shared pool. Needs only `projects:manage`: releasing only ever widens access, and every workload already on the resource stays legal. **422** when that resource is not assigned to that project
+- `POST /api/v1/projects/{project_id}/restrictions` - Grant access to the project. Needs `projects:manage`, and you must be able to reach the project yourself. Body carries **exactly one** of `user_email` (a workspace member) or `role_name` (a workspace role — everyone holding it reaches the project); sending both or neither is a **400**. Adding the first entry is what closes an otherwise open project. The **422** replies are distinct, so read the message rather than retrying: `Restricting projects is available on organization and enterprise plans` (checked first, before anything about the subject), `No member of this workspace has the email <address>`, `This workspace has no role named <name>`, `Subject already has access to this project`, and — for a workspace owner who holds no membership row — `The workspace owner already reaches every project`, which means no entry is needed rather than that something failed
+- `DELETE /api/v1/projects/{project_id}/restrictions/{id}` - Revoke one entry, where `{id}` is the numeric `id` from the project's `restrictions` list. Removing the last entry reopens the project to the whole workspace
 
 ### Project Environment Variables
 
@@ -1308,7 +1333,7 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `GET /api/v1/buckets` - List all buckets
 - `POST /api/v1/buckets` - Create new bucket
 - `GET /api/v1/buckets/{uuid}` - Get bucket details (includes S3 endpoint, S3 credentials, usage stats)
-- `PUT /api/v1/buckets/{uuid}` - Update bucket (label, visibility, disk size)
+- `PUT /api/v1/buckets/{uuid}` - Update bucket (label, project, visibility, disk size)
 - `DELETE /api/v1/buckets/{uuid}` - Delete bucket and all its contents
 - `PUT /api/v1/buckets/{uuid}/policy` - Set or update bucket policy (S3-compatible JSON)
 - `DELETE /api/v1/buckets/{uuid}/policy` - Remove bucket policy
@@ -1329,7 +1354,7 @@ sizing. Full field reference: the "Docker Compose Stacks" page in the Miget docs
 - `GET /api/v1/services` - List all services (includes `role` and `primary_addon_uuid` fields for PostgreSQL services)
 - `POST /api/v1/services` - Create service (types: postgres, shared_storage. PostgreSQL supports `creation_mode`: `fresh` or `external_replica`, and `instances` [1, 3, 5, 7] for HA clusters)
 - `GET /api/v1/services/{id}` - Get service details (includes `role`, `primary_addon_uuid`, and `replicas` for PostgreSQL primaries)
-- `PUT /api/v1/services/{id}` - Update service (PostgreSQL supports `instances` [1, 3, 5, 7] for scaling cluster nodes)
+- `PUT /api/v1/services/{id}` - Update service (PostgreSQL supports `instances` [1, 3, 5, 7] for scaling cluster nodes). `project_id` moves the service to another project (requires `services:manage`); a service that belongs to a stack moves with the stack instead
 - `DELETE /api/v1/services/{id}` - Delete service (deleting a primary cascades to all its replicas)
 - `PATCH /api/v1/services/{id}/state` - Change service state (process_start/process_stop/process_restart)
 - `POST /api/v1/services/{id}/rotate_password` - Rotate service password (databases and caches only, returns new password)
@@ -1350,7 +1375,7 @@ Stacks reuse `apps:*` permissions (read = `apps:view`, create/delete = `apps:man
 - `POST /api/v1/stacks/analyze` - Detect compose services and required env vars from a repo (creates nothing; call before creating)
 - `POST /api/v1/stacks` - Create a stack (analyzes the repo server-side, then provisions the apps/services)
 - `GET /api/v1/stacks/{uuid}` - Get stack details (computed `state`, `services`, `latest_deployment`, `deployment_config`)
-- `PUT /api/v1/stacks/{uuid}` - Update a stack (`label`, `compose_path`)
+- `PUT /api/v1/stacks/{uuid}` - Update a stack (`label`, `compose_path`). `project_id` moves the stack, and every application and service it runs, to another project (requires `apps:manage`)
 - `DELETE /api/v1/stacks/{uuid}` - Delete a stack (cascades to its apps and services)
 - `POST /api/v1/stacks/{uuid}/deploy` - Trigger a redeploy (optional: `commit_sha`)
 - `PUT /api/v1/stacks/{uuid}/deployment` - Update the GitHub deployment config (`branch`, `auto_deploy_enabled`, `repository`)
@@ -1454,7 +1479,7 @@ poll instead.
 
 ### Webhooks
 
-Workspace-level outbound webhooks. Miget POSTs a signed JSON payload to your endpoint when a subscribed event occurs, so you can react to deploys without polling `GET /api/v1/apps/{uuid}/deployments`. Requires `workspace:integrations` (admin only).
+Workspace-level outbound webhooks. Miget POSTs a signed JSON payload to your endpoint when a subscribed event occurs, so you can react to deploys without polling `GET /api/v1/apps/{uuid}/deployments`. Requires `workspace:general` (admin only).
 
 - `GET /api/v1/webhooks` - List webhooks
 - `POST /api/v1/webhooks` - Create a webhook (**the only response containing `secret`**)
@@ -1527,19 +1552,28 @@ Miget uses **role-based access control (RBAC)** within workspaces.
 ### Common Permissions
 
 - `apps:view` - View applications
-- `apps:create` - Create applications
-- `apps:manage` - Manage applications (update, delete)
+- `apps:manage` - Create, update and delete applications
 - `apps:deploy` - Deploy applications
 - `apps:operate` - Operate applications (start/stop, manage addons)
-- `resource:view` - View resources
-- `resource:manage` - Manage resources
+- `resources:view` - View resources
+- `resources:operate` - Operate resources
+- `resources:manage` - Create, update and delete resources
 - `projects:view` - View projects
-- `projects:manage` - Manage projects
+- `projects:operate` - Operate projects
+- `projects:manage` - Create, update and delete projects
+- `services:view` - View services
+- `services:operate` - Operate services
+- `services:manage` - Create, update and delete services
 - `buckets:view` - View buckets and list objects
 - `buckets:operate` - Operate buckets (upload, download, manage policy/ACL)
 - `buckets:manage` - Create and delete buckets
-- `workspace:integrations` - Manage workspace integrations and webhooks
-- `workspace:settings` - Manage workspace settings
+- `workspace:general` - Manage general workspace settings, API tokens and webhooks
+- `workspace:security` - Manage workspace security settings
+- `workspace:credentials` - Manage git and registry credentials
+- `workspace:integrations` - Manage workspace integrations
+- `workspace:billing` - Manage the plan and billing
+- `workspace:members` - Manage workspace members
+- `workspace:roles` - Manage workspace roles
 
 Workspace owners have all permissions automatically.
 
@@ -1554,7 +1588,7 @@ This section lists what each endpoint needs. It is a schema reference, not an in
 ### Create Application (`POST /api/v1/apps`)
 
 **Required fields:**
-- `name` (string) - Service name seed (lowercase, alphanumeric with hyphens). **The server appends a random suffix**, so the app you get back is named `my-api-x7k2p`, not `my-api`. Never build a URL or a Git remote from the name you sent — read `name` and `public_url` back from the create response. The unsuffixed form is kept separately as `service_name`, and `internal_url` is the **only** place it is used; every other identifier — `public_url`, the `git_push` repository path, the addon's `<ADDON_NAME>_URL` key — is built from the suffixed `name`. Reaching for `service_name` anywhere else produces a path that does not resolve. The suffix costs 6 characters and is applied *before* the 40-character limit is checked, so keep what you send to 34 characters or fewer — otherwise you get "Name is too long (maximum is 40 characters)" for a name that looked well under it.
+- `name` (string) - Service name seed (lowercase, alphanumeric with hyphens). **The server appends a random suffix**, so the app you get back is named `my-api-x7k2p`, not `my-api`. Never build a URL or a Git remote from the name you sent — read `name` and `public_url` back from the create response. The unsuffixed form is kept separately as `service_name`, and `internal_url` is the **only** place it is used; every other identifier — `public_url`, the `git_push` repository path, the addon's `<ADDON_NAME>_URL` key — is built from the suffixed `name`. Reaching for `service_name` anywhere else produces a path that does not resolve. The suffix costs 6 characters and is applied *before* the 40-character limit is checked, so keep what you send to 34 characters or fewer — otherwise you get "Name is too long (maximum is 40 characters)" for a name that looked well under it. **`service_name` gets no suffix, and it must be unique across the whole workspace** — two apps seeded `api` collide even on different resources and in different projects, and the second is refused with a 422 naming the codename as already taken. Disambiguate the seed (`shop-api`, `blog-api`) rather than relying on the suffix, which protects `name` but not `service_name`.
 - `label` (string) - Human-readable display name
 - `project_id` (string) - UUID of the project to create the application in (get from `GET /api/v1/projects`)
 - `resource_id` (string) - UUID of the compute resource (Miget) to assign (get from `GET /api/v1/resources`). The app's region is derived from this resource.
@@ -2088,12 +2122,14 @@ A standalone shared storage volume service.
 
 **Optional but important:**
 - `resource_id` (string) - UUID of the compute resource to attach the bucket to (get from `GET /api/v1/resources`). Optional at the API level, but a bucket needs a resource — supply this (or the legacy alias `miget_id`, deprecated) in practice.
+- `project_id` (string) - UUID of the project the bucket belongs to (get from `GET /api/v1/projects`). Never inferred: omit it and the bucket is created with no project, even in a workspace with a single project. Send `null` on `PUT /api/v1/buckets/{uuid}` to unassign an existing bucket.
 - `visibility` (string) - Bucket visibility: `"public_access"` or `"private_access"` (default: `"private_access"`)
 - `disk_size` (float) - Disk allocation in GiB (default: 0.1)
 
 **Ask only what you cannot derive:**
 - "What should be the bucket's display name?"
 - "Which resource (Miget) should the bucket be attached to? (provide resource ID)"
+- "Which project should the bucket belong to, or should it stay outside any project?"
 - "Should the bucket be public or private? (default: private)"
 - "How much storage do you need in GiB? (default: 0.1 GiB)"
 
