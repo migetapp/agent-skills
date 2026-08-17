@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.1 — 2026-08-17
+
+Document two things a webhook consumer cannot infer from the endpoints alone: an event that was missing from the table, and why a webhook narrowed to named applications hears nothing from their preview environments.
+
+- **`app_state_changed` joins the event table:** it fires when somebody starts, stops, or restarts an application by hand. `app_stopped` reads as though it covers this and does not — that one is the platform giving up on a crash loop, which is a different situation and stays distinct. Previously an agent subscribing to "the app stopped" had no way to hear about a deliberate stop at all
+- **`include_review_apps` is a create and update field, and it is off by default:** a preview environment is created as its own application with its own UUID, so listing the parent in `app_uuids` does not cover it. An agent that scoped a webhook to specific applications and then wondered why pull-request deployments were silent now has the answer, and the switch to change it. A webhook covering every application in the workspace already receives them — worth knowing before pointing one at a busy repository
+- **The event list in the API response documentation is generated from the catalogue** rather than written by hand, where it had been left naming two events while the catalogue grew to eleven
+
 ## 0.6.0 — 2026-08-13
 
 Document two capabilities the API gained and the skill previously said an agent could not have — files on disk, and pull-request preview environments — and, on the other side, draw the line around the one area that is deliberately not on the API at all: billing.

@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.6.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.6.1` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -32,7 +32,7 @@ These are the platform's fixed rules. Most failed first deployments trace back t
 | **`quota` is in bytes** | `quota.ram_size` is bytes (`134217728` = 128 MiB), `quota.cpu_size` is a fractional core count. There are no top-level `ram_size`/`cpu_size` fields on the response. |
 | **CPU is never the capacity constraint** | Placement and capacity are checked against **RAM and disk only** — CPU is not a quota and is never the reason an app or addon cannot be created. On dev plans (the free plan included) `cpu_size` is a *ceiling*, not a reservation: the **Miget Fair Scheduler** distributes the resource's CPU dynamically across every app and addon on it, so an idle process holds nothing back from a busy one. Guaranteed, dedicated CPU is a Pro-plan feature. Never tell a user that a database "will eat the CPU" of a small resource, and never refuse to co-locate an app and its database on that ground — decide on RAM. |
 | **A database addon injects two variables, not one** | A `postgres` or `mysql` addon sets **both** `<ADDON_NAME>_URL` (e.g. `POSTGRES_YZQUW_URL`) and `DATABASE_URL` to the same connection string; `valkey` sets `<ADDON_NAME>_URL` and `REDIS_URL`. The generic alias is skipped only if the app already has a variable of that name, which is never overwritten. Read `GET /api/v1/apps/{uuid}/vars` instead of guessing, and do not add a duplicate `DATABASE_URL` "because the framework needs one". |
-| **`name` is server-assigned and always suffixed** | The server appends a random suffix to whatever `name` you send — `wall` comes back as `wall-pfhqv`, and a resource is `migetmxq`. Apps, addons, services, stacks, buckets and secret files all work this way. **The suffixed `name` is the identifier everywhere**: public URLs, Git remote paths, connection variable keys. `service_name` (the unsuffixed form) appears in exactly one place, `internal_url`, and `label` is display text with no addressing role. Never reconstruct any of these from the name you sent, and never strip a suffix that looks like noise — read the field back and use it verbatim. |
+| **`name` is server-assigned and always suffixed** | The server appends a random suffix to whatever `name` you send — `wall` comes back as `wall-pfhqv`, and a resource is `migetmxq`. Apps, addons, services, stacks and buckets all work this way. **Secret files go further** — you cannot send a name at all, only `filename` and `text`, and the whole name is generated server-side (`secret-file-gfeey`). **The suffixed `name` is the identifier everywhere**: public URLs, Git remote paths, connection variable keys. `service_name` (the unsuffixed form) appears in exactly one place, `internal_url`, and `label` is display text with no addressing role. Never reconstruct any of these from the name you sent, and never strip a suffix that looks like noise — read the field back and use it verbatim. |
 | **`state` mixes two vocabularies** | On apps, addons and services `state` reports the platform lifecycle while the object is provisioning and the raw **Kubernetes** status once it is up. There is no `active`, and a healthy database reports **`healthy`** (storage reports **`bound`**) — only an *app* reports `running`. Never poll for one hard-coded string; see "Reading `state`". |
 | **Addon vs standalone service** | An addon's lifecycle is tied to its app and is the right default — deleting the app deletes it. A standalone service outlives any single app. Note that explicit mounting works only for `shared_storage`; a shared database is shared by pointing several apps at its connection variables, not by mounting it. |
 | **Billing is not on the API — and deleting is not cancelling** | There is no endpoint that cancels a subscription, changes a plan's payment, suspends or deletes a workspace. Those are dashboard-only, on purpose. The trap is `DELETE /api/v1/resources/{uuid}`: it destroys the resource and everything on it, but the **subscription keeps charging** for the workspace plan and any other resource. Deleting things over the API never stops a bill. Send the user to the dashboard — see "Stopping the bill". |
@@ -219,6 +219,8 @@ Preview environments (review apps) work only for `github` apps — so a repo tha
 | `valkey` | 32 MiB | 0.1 GiB | 0.1 |
 
 Prefer an **addon** over a standalone service unless more than one app genuinely needs the same database.
+
+**The free plan needs a card on file.** Nothing is charged; the card is how Miget tells a person from a throwaway account, and each card is good for one free resource. A request for a free resource from an account with no saved card is rejected with `422` and a message saying so; a card already used for somebody else's free resource is rejected the same way, pointing at support. Cards added through Apple Pay or Google Pay count. This applies to creating a resource and to moving an existing one down to the free plan.
 
 **The free plan.** One free resource per user, personal workspaces only, and it is small: 0.1 core, 256 MiB RAM, 1 GiB disk — so the app **and every addon on it** must together fit inside 256 MiB of RAM and 1 GiB of disk. It also cannot use public custom ports, autoscaling, cron jobs, or Postgres backups, and addon CPU is pinned to 0.1 regardless of what you request. It suits a first deploy or a demo; say plainly when a project has outgrown it rather than trying to squeeze it in.
 
@@ -1556,13 +1558,33 @@ Workspace-level outbound webhooks. Miget POSTs a signed JSON payload to your end
 
 **Handle `type: "ping"`.** The test event carries `"type": "ping"` with an empty `data` object. `ping` is *not* one of the subscribable event types, so a consumer that rejects unknown types will fail the test even though the endpoint is otherwise fine. Either accept `ping` explicitly or ignore unknown types.
 
-**Create fields:** `name` (unique per workspace), `url` (http or https), `event_filter` (array), optional `app_uuids` (array) and `enabled` (default `true`).
+**Create fields:** `name` (unique per workspace), `url` (http or https), `event_filter` (array), optional `app_uuids` (array), `enabled` (default `true`) and `include_review_apps` (default `false`).
 
 **The endpoint must be publicly reachable.** A `url` pointing into private address space — loopback, RFC1918, link-local (including `169.254.169.254`), CGNAT, or the `localhost`, `.local` and `.internal` hostnames — is rejected with `422`. The host is re-resolved before every delivery, so a name that later starts resolving to a private address stops being delivered to rather than being retried.
 
 **Scoping to specific apps.** By default a webhook receives events from **every app in the workspace**, including apps created later. Pass `app_uuids` to narrow it to specific apps; send an empty array to widen it back. Apps must belong to the same workspace or the request is rejected with `422`. Either way the payload carries `data.app_id`, so a consumer can filter on its own as well.
 
-**Event types:** `deploy_started` (a deployment enters `running`) and `deploy_ended` (a deployment reaches `completed`, `failed`, or `cancelled`). There is no separate build event — on Miget the build and the deployment are one lifecycle, and `build_id` *is* the deployment UUID.
+**Event types:**
+
+| Event | Fires when |
+|---|---|
+| `deploy_started` | A deployment enters `running` |
+| `deploy_ended` | A deployment reaches `completed`, `failed`, or `cancelled` |
+| `app_unhealthy` | An application fails a liveness, readiness, or startup check |
+| `app_crash_loop` | An application is restarting repeatedly and not recovering |
+| `app_stopped` | The platform stopped an application after repeated crashes |
+| `app_state_changed` | Somebody started, stopped, or restarted an application |
+| `app_blocked` | An application was blocked for a security issue |
+| `scaling_limit_reached` | An application could not scale to the replicas it asked for |
+| `certificate_expiring` | An SSL certificate is 30, 7, or 1 day from expiring without renewing |
+| `domain_verified` | Domain verification finished, whether it verified or failed |
+| `quota_alert` | Observability ingestion crossed a warning or critical threshold |
+
+There is no separate build event — on Miget the build and the deployment are one lifecycle, and `build_id` *is* the deployment UUID.
+
+**Preview environments are separate apps.** A preview environment is created as its own application with its own UUID, so a webhook narrowed with `app_uuids` does not receive its events even when the parent application is listed. Set `include_review_apps: true` to have those events matched against the parent as well. A webhook covering every app in the workspace already receives them, which is worth knowing before opening a busy repository's pull requests.
+
+`quota_alert` belongs to the workspace rather than to any one app, so it is delivered to every subscribed webhook regardless of `app_uuids`. Every other event carries `data.app_id` and respects app scoping.
 
 **Static site deployments fire these events too**, with `data.app_id` set to the static site's UUID — the same UUID `GET /api/v1/static` returns, and the one to pass in `app_uuids` to scope a webhook to a site. A `zip` or `sftp` deployment carries no commit, so `commit_sha`, `commit_message` and `branch` come back `null`.
 
