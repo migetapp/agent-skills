@@ -2,11 +2,13 @@
 
 ## 0.6.1 — 2026-08-17
 
-Document two things a webhook consumer cannot infer from the endpoints alone: an event that was missing from the table, and why a webhook narrowed to named applications hears nothing from their preview environments.
+Document three things an agent cannot infer from the endpoints alone: an event that was missing from the table, why a webhook narrowed to named applications hears nothing from their preview environments, and a free trial that changes what creating a resource costs today.
 
 - **`app_state_changed` joins the event table:** it fires when somebody starts, stops, or restarts an application by hand. `app_stopped` reads as though it covers this and does not — that one is the platform giving up on a crash loop, which is a different situation and stays distinct. Previously an agent subscribing to "the app stopped" had no way to hear about a deliberate stop at all
 - **`include_review_apps` is a create and update field, and it is off by default:** a preview environment is created as its own application with its own UUID, so listing the parent in `app_uuids` does not cover it. An agent that scoped a webhook to specific applications and then wondered why pull-request deployments were silent now has the answer, and the switch to change it. A webhook covering every application in the workspace already receives them — worth knowing before pointing one at a busy repository
 - **The event list in the API response documentation is generated from the catalogue** rather than written by hand, where it had been left naming two events while the catalogue grew to eleven
+- **A new account gets a 30-day free trial on `miget_hobby_5`, and only on that plan bought alone:** the create call and its `checkout_url` look exactly as before, but nothing is charged until the trial ends. Any other plan is a normal purchase, cheaper ones included, and so is that plan sent together with paid `components`. An agent that quietly substitutes a different plan, or adds a component to the same request, turns a free month into an immediate bill — and one that upgrades mid-trial "while it is free anyway" ends the trial and triggers a charge that day
+- **The trial needs a saved payment card and is refused with `422` without one,** the same rule the free plan already had, now reaching a paid plan. The refusal is the answer, not something to retry around: buying the plan without the trial costs the user real money they did not ask to spend
 
 ## 0.6.0 — 2026-08-13
 
