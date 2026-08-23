@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.6.1` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.8.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -542,6 +542,33 @@ A **Bucket** is an S3-compatible object storage container.
 - Buckets support **policies** (S3-compatible JSON bucket policies)
 - Buckets support **ACLs** (S3-compatible XML access control lists)
 - Bucket objects can be managed via presigned upload/download URLs
+
+### VPCs (private networks)
+
+A **VPC** is a private network a workspace's workloads can share. Apps, services
+and addons attached to it reach each other by name, and nothing outside it can
+reach them.
+
+- A VPC belongs to **one region** and cannot span regions. A workspace working in
+  two regions gets one VPC in each, and only workloads running on a resource in
+  that region can attach.
+- The range defaults to `10.224.0.0/16`. It must be RFC1918, `/22` or larger, and
+  must not overlap the platform's own networks — the create call refuses with the
+  specific conflict rather than failing later.
+- Two workspaces may sit on the same range: VPCs are separate routers and never
+  see each other. The consequence is that two VPCs on the same range can never be
+  peered, so pick your own range if you plan to connect them.
+- Subnets are carved out of the VPC. The only thing that distinguishes them is
+  `public`: public keeps the platform default route, private moves it to the VPC
+  so egress leaves through the workspace's own gateway.
+- **Attaching restarts the workload.** An interface cannot be added to a running
+  pod, so for an addon this is a database restart. Say so before you do it.
+- An attached workload answers to `fqdn`. That name resolves to a **pod address**,
+  not a fixed one, and the record refreshes on the next attach, detach or route
+  change — treat it as a name to reach, never as a stable address. A cronjob gets
+  no `fqdn` at all, because its pods are transient.
+- `resolver_v4` is the VPC's own DNS resolver. Point an external resolver at it to
+  resolve `migetapp.internal` names from outside the platform.
 
 ### Services
 
@@ -1421,6 +1448,9 @@ Ephemeral clones of an app, one per GitHub pull request or branch. **Only for `g
 - `PUT /api/v1/buckets/{uuid}/objects/{key}/rename` - Rename an object
 - `DELETE /api/v1/buckets/{uuid}/objects/{key}` - Delete an object or folder
 
+`{key}` is the full object key, percent-encoded — the slashes of a nested key
+included, so `docs/report.pdf` goes in the path as `docs%2Freport.pdf`.
+
 ### Services
 
 - `GET /api/v1/services` - List all services (includes `role` and `primary_addon_uuid` fields for PostgreSQL services)
@@ -1438,6 +1468,36 @@ Ephemeral clones of an app, one per GitHub pull request or branch. **Only for `g
 - `GET /api/v1/services/{id}/backups` - Get service backups (PostgreSQL primary only, not available for replicas)
 - `POST /api/v1/services/{id}/restore_backup` - Restore service from backup (PostgreSQL primary only, not available for replicas)
 - `POST /api/v1/services/{id}/reset_database` - Reset service database (PostgreSQL primary only, not available for replicas)
+
+### VPCs (Private Networks)
+
+VPCs use their own `network:*` permissions: read = `network:view`, attach/detach =
+`network:operate`, everything else = `network:manage`.
+
+- `GET /api/v1/vpcs` - List the workspace's private networks
+- `POST /api/v1/vpcs` - Create one. `region_id` is required; `name` defaults to `default` and `cidr_v4` to `10.224.0.0/16`. A range that is not RFC1918, is smaller than `/22`, or overlaps a platform network is refused with **422** naming the conflict
+- `GET /api/v1/vpcs/{uuid}` - Get one, including `resolver_v4` and `vpn_pool_v4`
+- `DELETE /api/v1/vpcs/{uuid}` - Delete it. **422** while any subnet remains — remove those first
+- `GET /api/v1/vpcs/{uuid}/subnets` - List subnets
+- `POST /api/v1/vpcs/{uuid}/subnets` - Create one (`name`, plus `cidr_v4` unless `family` is `ipv6`). Optional `family` — `dual` (default), `ipv4` for no IPv6 at all, `ipv6` for no IPv4 — and `public`, default `true`. `cidr_v6` is derived from the VPC's own when omitted. The range must sit inside the VPC's own and must not overlap a sibling
+- `DELETE /api/v1/vpcs/{uuid}/subnets/{subnet_uuid}` - Delete a subnet. **422** while a workload is still attached to it
+- `GET /api/v1/vpcs/{uuid}/attachments` - List attached workloads with the `fqdn` each answers to
+- `POST /api/v1/vpcs/{uuid}/attachments` - Attach a workload (`subnet_uuid`, `attachable_type` one of `App`/`Service`/`Addon`, `attachable_uuid`). **The workload restarts** — for an addon that is a database restart. **422** when the workload runs in a different region from the VPC
+- `DELETE /api/v1/vpcs/{uuid}/attachments/{attachment_uuid}` - Detach. The workload restarts again
+
+**A new VPC comes back `pending` and already has a subnet.** `POST /api/v1/vpcs`
+answers immediately with `status: "pending"` and `cidr_v6`, `resolver_v4` and
+`vpn_pool_v4` all `null` — the platform derives those and answers a moment later.
+Poll `GET /api/v1/vpcs/{uuid}` until `status` is `active`, then read them. That
+same reply carries a ready-made subnet named `default` covering the first `/24`
+of the range, so **list the subnets before creating one**: attaching a workload
+usually needs no subnet call at all, and carving `10.224.1.0/24` by hand is
+refused with `422` for overlapping the subnet you already have.
+
+There is no update endpoint: a VPC's name, label and range are fixed once created.
+
+VPN gateways (WireGuard, Tailscale, Cloudflare WARP and site-to-site) are managed
+from the dashboard and have no API endpoints yet.
 
 ### Stacks (Docker Compose)
 
@@ -1693,6 +1753,8 @@ This section lists what each endpoint needs. It is a schema reference, not an in
 - `deployment_config` (object) - Configuration specific to the chosen deployment method (see table below)
 - `app_vars_attributes` (array) - Environment variables to set at creation (array of `{key, value}` objects)
 - `private_access` (boolean) - Restrict the app to private access only — no public ingress, reachable only inside the workspace network (default `false`). Also accepted on `PUT /api/v1/apps/{uuid}`.
+- `vpc_uuid` (string) - Join a VPC at creation instead of attaching afterwards, which saves the restart an attach costs. The VPC's default subnet is used. The VPC must be in the same region as `resource_id`.
+- `vpc_subnet_uuid` (string) - Join this subnet specifically, when the VPC has more than one. It implies its VPC, so `vpc_uuid` can be left out.
 
 #### Deployment Configuration by Method
 
@@ -2131,6 +2193,7 @@ A persistent storage volume addon.
     *   `service_id` (integer): To attach an existing shared storage service, provide its ID. When given, `mount_point` and `storage_access` are inherited from that service — omit them.
     *   `mount_point` (string, **required unless `service_id` is given**): The path inside the container where the volume should be mounted (e.g., `/data`).
     *   `storage_access` (string, **required unless `service_id` is given**): The access mode. Must be one of `RWO` (ReadWriteOnce) or `RWX` (ReadWriteMany).
+    *   `sub_path` (string): Mount a subdirectory of the volume instead of its root, e.g. `media/uploads` — created if missing. This is how several apps share one volume without seeing each other's files. Relative path only (`.`, `..` and backslashes are refused) and **RWX only**; sending it with `RWO` is rejected.
 
 **Example questions:**
 
@@ -2520,24 +2583,23 @@ A pattern or label the filter requires but that you leave empty is a **422**, so
 ### Create App Cronjob (`POST /api/v1/apps/{uuid}/cronjobs`)
 
 **Required fields:**
-- `name` (string) - Unique cron job identifier
+- `label` (string) - Human-readable display name
+- `command` (string) - Shell command to execute
+- `cron` (string) - Cron expression (e.g., `"0 * * * *"` for hourly). Required only when `schedule_type` is `"cron"`
 
 **Optional but important:**
-- `label` (string) - Human-readable display name
-- `schedule_type` (string) - `"cron"` for custom cron expression, `"interval"` for predefined intervals
+- `schedule_type` (string) - `"cron"` for custom cron expression, `"interval"` for predefined intervals (default `"interval"`)
 - `interval_type` (string) - `"every_10_minutes"`, `"hourly"`, or `"daily"` (for interval type)
-- `cron` (string) - Cron expression (e.g., `"0 * * * *"` for hourly, for cron type)
-- `command` (string) - Shell command to execute
 - `daily_time` (string) - Execution time for daily jobs in HH:MM format (24-hour)
 - `minute` (string) - Minute component for scheduling (0-59)
 - `hour` (string) - Hour component for scheduling (0-23)
 
 **Important notes:**
+- The identifier the platform runs the job under is generated, not chosen — it comes back as `name` (`cronjob-lhs2i`). A `name` you send is ignored.
 - Updating a cronjob (`PUT`) only changes `label` and `command`. The **schedule cannot be changed in place** — to reschedule, DELETE the cronjob and create a new one.
 - Per-run logs are available via `GET /api/v1/apps/{uuid}/cronjobs/{id}/stream_logs` (SSE) once the job has run at least once.
 
 **Ask only what you cannot derive:**
-- "What should be the cronjob name?"
 - "What display label should I use?"
 - "What schedule type? (cron for custom expression, interval for predefined)"
 - "If interval, which interval? (every_10_minutes/hourly/daily)"
@@ -2906,6 +2968,7 @@ Creates a storage addon on the app linked to this service.
 
 **Optional fields:**
 - `mount_point` (string) - Container mount path (e.g., /data)
+- `sub_path` (string) - Subdirectory of the shared volume to mount instead of its root, e.g. `media/uploads`. It is created if missing, and it is what lets several apps share one volume without seeing each other's files. Relative path only — `.` and `..` segments and backslashes are refused — and RWX (shared) storage only.
 - `label` (string) - Display label for the mounted addon
 
 ### Unmount App from Service (`POST /api/v1/services/{id}/unmount_app`)
