@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — 2026-08-24
+
+Shared storage gains subpath mounts: an app can mount a subdirectory of a shared volume instead of its root, so several apps can share one volume without seeing each other's files.
+
+- **`sub_path` on mounting an app to a shared storage service** (`POST /api/v1/services/{id}/mount_app`): a relative path like `media/uploads`, created automatically if it does not exist. Each mounted app can use a different `sub_path` on the same volume, which is the supported way to partition a shared volume between apps — there is no per-file isolation otherwise
+- **`sub_path` on storage addon creation** (`POST /api/v1/apps/{uuid}/addons` with `type: storage`): valid for `RWX` storage and for mounts attached via `service_id`. Sending it with `RWO` storage is refused with a `422` — a subpath is a shared-volume concept, and single-instance block volumes do not support it
+- **One mount per volume per app**: mounting the same shared storage again replaces the app's existing mount (including its `sub_path`) rather than adding a second one. An agent asked to "also mount it at another path" should know the first mount will be replaced, not joined
+- The stored `sub_path` is returned in the addon's `settings`, so an agent can read back where inside the shared volume an app is actually writing
+
 ## 0.5.1 — 2026-08-13
 
 Describe the two kinds of API token, so that a `403` an agent cannot explain stops looking like a broken credential.

@@ -5,7 +5,7 @@ description: Deploy and manage apps, databases, buckets, and services on Miget P
 
 # Miget API - Guide for AI Agents
 
-**Skill version:** `0.5.1` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
+**Skill version:** `0.6.0` — see the [changelog](https://github.com/migetapp/agent-skills/blob/main/CHANGELOG.md).
 
 ## Overview
 
@@ -2044,6 +2044,7 @@ A persistent storage volume addon.
     *   `service_id` (integer): To attach an existing shared storage service, provide its ID. When given, `mount_point` and `storage_access` are inherited from that service — omit them.
     *   `mount_point` (string, **required unless `service_id` is given**): The path inside the container where the volume should be mounted (e.g., `/data`).
     *   `storage_access` (string, **required unless `service_id` is given**): The access mode. Must be one of `RWO` (ReadWriteOnce) or `RWX` (ReadWriteMany).
+    *   `sub_path` (string, optional): Mount only this subdirectory of the volume instead of its root — a relative path like `media/uploads`, created automatically if missing. Only valid for `RWX` storage and shared-storage mounts; sending it with `RWO` is refused with a `422`. Each app mounting the same shared volume can use a different `sub_path`, which is how several apps share one volume without seeing each other's files.
 
 **Example questions:**
 
@@ -2777,6 +2778,7 @@ Creates a storage addon on the app linked to this service.
 
 **Optional fields:**
 - `mount_point` (string) - Container mount path (e.g., /data)
+- `sub_path` (string) - Subdirectory of the shared volume to mount instead of its root (relative path, e.g. `media/uploads`; created automatically if missing). Each mounted app can use a different `sub_path` to keep its files apart on the same shared volume.
 - `label` (string) - Display label for the mounted addon
 
 ### Unmount App from Service (`POST /api/v1/services/{id}/unmount_app`)
