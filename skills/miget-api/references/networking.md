@@ -148,12 +148,14 @@ Tell the customer this before you create the device, not after they lose the fil
 
 ## Peer routes
 
-Only **Cloudflare WARP and Tailscale** need explicit routes: WireGuard's client
-pool and an IPsec connection's remote selectors are derived by the platform from
-the gateways themselves.
+Only **Cloudflare WARP and Tailscale** normally need explicit routes: WireGuard's
+client pool and an IPsec connection's remote selectors are derived by the platform
+from the gateways themselves. The endpoint accepts every gateway kind anyway, to
+match the dashboard — but a route naming a gateway that is not running is dropped
+rather than installed, so an unnecessary one is inert rather than harmful.
 
 - `GET /api/v1/vpcs/{uuid}/peer_routes` - List staged and applied routes
-- `POST /api/v1/vpcs/{uuid}/peer_routes` - Stage one (`cidr`, `gateway_kind` of `cloudflare` or `tailscale`, optional `description`). Staging changes nothing yet
+- `POST /api/v1/vpcs/{uuid}/peer_routes` - Stage one (`cidr`, `gateway_kind`, optional `description`). Every kind is accepted, but in practice only `cloudflare` and `tailscale` need one. Staging changes nothing yet
 - `POST /api/v1/vpcs/{uuid}/peer_routes/apply` - Send every staged route at once. **This restarts every workload attached to the VPC.** **422** when nothing is staged
 - `DELETE /api/v1/vpcs/{uuid}/peer_routes/{route_uuid}` - Remove one. A staged route goes outright; an applied one is withdrawn from the cluster, which restarts the workloads again
 
