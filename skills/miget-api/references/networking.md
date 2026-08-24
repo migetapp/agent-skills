@@ -124,7 +124,7 @@ the first site-to-site connection, which is what pays for its address.
 ## VPN endpoints
 
 - `GET /api/v1/vpcs/{uuid}/vpn_gateways` - List the terminators enabled on the VPC
-- `POST /api/v1/vpcs/{uuid}/vpn_gateways` - Enable one. `kind` is `wireguard`, `tailscale` or `cloudflare`; one of each per VPC. Cloudflare needs `organization`, `client_id` and `client_secret`; Tailscale needs `auth_key` and takes optional `tag` and `accept_routes`. Those credentials are stored encrypted and **never returned by any endpoint**
+- `POST /api/v1/vpcs/{uuid}/vpn_gateways` - Enable one. `kind` is `wireguard`, `tailscale` or `cloudflare`; one of each per VPC. Cloudflare needs `organization`, `client_id` and `client_secret`; Tailscale needs `auth_key`. Those credentials are stored encrypted and **never returned by any endpoint**. Tailscale's `tag` and `accept_routes` are accepted and stored but are **not sent to the platform today** — they change nothing, so set the ACL in your own tailnet
 - `DELETE /api/v1/vpcs/{uuid}/vpn_gateways/{gateway_uuid}` - Disable it, revoking every device on it. **422** while site-to-site connections still terminate on it
 - `GET /api/v1/vpcs/{uuid}/vpn_users` - List the WireGuard devices, with the address each answers to
 - `POST /api/v1/vpcs/{uuid}/vpn_users` - Register a device. `name` is lowercase letters, numbers and hyphens. **422** if WireGuard is not enabled first
