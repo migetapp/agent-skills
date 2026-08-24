@@ -116,7 +116,7 @@ already have.
 | **WireGuard** | Individual people and laptops. The platform books the address and port and issues one config per device | Nothing scarce — shares one address across ports |
 | **Tailscale** | A workspace already running a tailnet; the VPC joins it as a node | Nothing scarce — dials out |
 | **Cloudflare WARP** | A workspace already on Cloudflare Zero Trust | Nothing scarce — dials out |
-| **IPsec (site-to-site)** | A whole remote network, e.g. an AWS VPC | **One public IPv4 per tunnel, $199/mo** |
+| **IPsec (site-to-site)** | A whole remote network, e.g. an AWS VPC | **$199/mo per tunnel**, and the VPC's IPsec gateway holds a public IPv4 |
 
 WireGuard, Tailscale and WARP are enabled directly. IPsec is not: it comes up with
 the first site-to-site connection, which is what pays for its address.
@@ -169,8 +169,10 @@ will cost before you do.
 
 Three things to say out loud before calling this:
 
-- It costs **$199/mo** for as long as the tunnel exists, because IPsec needs fixed
-  UDP ports and so one public IPv4 carries exactly one peer.
+- It costs **$199/mo** for as long as the tunnel exists. The first tunnel on a VPC
+  also claims one of the region's public IPv4 addresses for that VPC's IPsec
+  gateway; a second tunnel on the same VPC reuses the gateway and its address
+  rather than claiming another.
 - Only the **workspace owner** may call it. Anyone else gets `403`.
 - A region has a small pool of these addresses. When it is empty the answer is
   `422`, not a queue.
