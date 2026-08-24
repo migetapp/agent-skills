@@ -346,6 +346,12 @@ POST /api/v1/services/{service-id}/create_replica
 - Replicas can be promoted to standalone instances using the promote endpoint - this is irreversible and the promoted instance will no longer receive updates from the primary
 - The `create_replica` endpoint returns the full serialized replica entity (same shape as `GET /api/v1/apps/{uuid}/addons/{id}` or `GET /api/v1/services/{id}`), including `uuid`, `role: "replica"`, `primary_addon_uuid`, and `connection_details` - no follow-up `GET` is required to discover the new replica
 
+**`connection_details` is empty until there is something to connect to.** It is `{}`
+for shared storage, which has no connection, and `{}` for a database that is still
+being provisioned - the credentials are written after the add-on row. Read it
+defensively and poll `state` rather than expecting `connection_details.internal`
+on the response to the create call.
+
 **Response fields for PostgreSQL addons/services:**
 - `role` (string) - `"primary"` or `"replica"` (null for non-PostgreSQL)
 - `primary_addon_uuid` (string) - UUID of the primary addon (only present on replicas)
@@ -503,12 +509,11 @@ Creates a storage addon on the app linked to this service.
 tells you where inside the shared volume an application is actually writing. That
 is the only way to check it — nothing else reports it.
 
-**Mount a given service to a given application once.** Calling `mount_app` again
-for the same pair does not move the existing mount: it creates a *second* storage
-addon, labelled `Storage #2 for <service> service`, with its own mount point and
-its own `sub_path`. `unmount_app` then removes only one of them and leaves the
-other in place, because it matches a single addon by service. If an application
-needs a different path, unmount first and mount again.
+**A service mounts to a given application once.** Calling `mount_app` again for
+the same pair is refused with **422** rather than moving the mount, because
+`unmount_app` matches a single addon by service and could not tell two of them
+apart. To change where an application mounts a volume, unmount it and mount it
+again at the new path.
 
 ## Unmount App from Service (`POST /api/v1/services/{id}/unmount_app`)
 
