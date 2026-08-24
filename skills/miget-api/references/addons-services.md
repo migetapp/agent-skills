@@ -1,6 +1,6 @@
 # Add-ons and services
 
-A **add-on** belongs to one application and dies with it. A **service** stands on
+An **add-on** belongs to one application and dies with it. A **service** stands on
 its own and can be mounted into several applications. Both are the same
 underlying types — PostgreSQL, MySQL, Valkey, storage — so this file covers them
 together and says which shape each endpoint takes.
