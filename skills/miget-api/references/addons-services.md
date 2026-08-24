@@ -498,6 +498,18 @@ Creates a storage addon on the app linked to this service.
 - `sub_path` (string) - Subdirectory of the shared volume to mount instead of its root, e.g. `media/uploads`; created if missing. Each mounted app can use a different `sub_path` to keep its files apart on the same shared volume. Relative path only — `.` and `..` segments and backslashes are refused — and RWX (shared) storage only.
 - `label` (string) - Display label for the mounted addon
 
+**Read the mount back from `settings`.** The storage addon's `settings` carries
+`mount_point`, `access_type` and `sub_path`, so `GET /api/v1/apps/{uuid}/addons/{id}`
+tells you where inside the shared volume an application is actually writing. That
+is the only way to check it — nothing else reports it.
+
+**Mount a given service to a given application once.** Calling `mount_app` again
+for the same pair does not move the existing mount: it creates a *second* storage
+addon, labelled `Storage #2 for <service> service`, with its own mount point and
+its own `sub_path`. `unmount_app` then removes only one of them and leaves the
+other in place, because it matches a single addon by service. If an application
+needs a different path, unmount first and mount again.
+
 ## Unmount App from Service (`POST /api/v1/services/{id}/unmount_app`)
 
 **Required fields:**
