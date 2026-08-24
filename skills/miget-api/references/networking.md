@@ -125,7 +125,7 @@ the first site-to-site connection, which is what pays for its address.
 
 - `GET /api/v1/vpcs/{uuid}/vpn_gateways` - List the terminators enabled on the VPC
 - `POST /api/v1/vpcs/{uuid}/vpn_gateways` - Enable one. `kind` is `wireguard`, `tailscale` or `cloudflare`; one of each per VPC. Cloudflare needs `organization`, `client_id` and `client_secret`; Tailscale needs `auth_key`. Those credentials are stored encrypted and **never returned by any endpoint**. Tailscale takes its tag from the auth key, so create that key tagged, reusable and ephemeral
-- `DELETE /api/v1/vpcs/{uuid}/vpn_gateways/{gateway_uuid}` - Disable it, revoking every device on it. **422** while site-to-site connections still terminate on it
+- `DELETE /api/v1/vpcs/{uuid}/vpn_gateways/{gateway_uuid}` - Disable it, revoking every device on it. **422** while site-to-site connections still terminate on it. For an IPsec gateway this is what returns its public IPv4 to the pool — deleting the last connection stops the charge but leaves the address held until the gateway itself is disabled
 - `GET /api/v1/vpcs/{uuid}/vpn_users` - List the WireGuard devices, with the address each answers to
 - `POST /api/v1/vpcs/{uuid}/vpn_users` - Register a device. `name` is lowercase letters, numbers and hyphens. **422** if WireGuard is not enabled first
 - `GET /api/v1/vpcs/{uuid}/vpn_users/{user_uuid}/config` - The device's WireGuard config file. **Readable exactly once** — see below
@@ -167,7 +167,7 @@ will cost before you do.
 
 - `GET /api/v1/vpcs/{uuid}/site_connections` - List the tunnels, each with the public address it holds
 - `POST /api/v1/vpcs/{uuid}/site_connections` - Create one. `name`, `remote_cidrs`, and `tunnels` (each `remote_gateway` plus `psk` from the far side's configuration); optional `peer_asn`
-- `DELETE /api/v1/vpcs/{uuid}/site_connections/{connection_uuid}` - Tear it down. This stops the $199/mo charge but does **not** release the public address — that is held by the IPsec gateway, which goes only with the VPC
+- `DELETE /api/v1/vpcs/{uuid}/site_connections/{connection_uuid}` - Tear it down. This stops the $199/mo charge but does **not** release the public address — that is held by the IPsec gateway. Disable the gateway once its last connection is gone to get the address back
 
 Three things to say out loud before calling this:
 
