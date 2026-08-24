@@ -175,7 +175,7 @@ A persistent storage volume addon.
     *   `service_id` (integer): To attach an existing shared storage service, provide its ID. When given, `mount_point` and `storage_access` are inherited from that service — omit them.
     *   `mount_point` (string, **required unless `service_id` is given**): The path inside the container where the volume should be mounted (e.g., `/data`).
     *   `storage_access` (string, **required unless `service_id` is given**): The access mode. Must be one of `RWO` (ReadWriteOnce) or `RWX` (ReadWriteMany).
-    *   `sub_path` (string): Mount a subdirectory of the volume instead of its root, e.g. `media/uploads` — created automatically if missing. Each app mounting the same shared volume can use a different `sub_path`, which is how several apps share one volume without seeing each other's files. Relative path only — `.` and `..` segments and backslashes are refused — and **RWX only**; sending it with `RWO` is refused with a `422`.
+    *   `sub_path` (string): Mount a subdirectory of the volume instead of its root, e.g. `media/uploads` — created automatically if missing. Each app mounting the same shared volume can use a different `sub_path`, which is how several apps share one volume without seeing each other's files. Relative path only — `.` and `..` segments and backslashes are refused — and **RWX only**; sending it with `RWO` is refused with a `422`. It is equally valid on a mount attached with `service_id`, which is always RWX. The value is stored in the addon's `settings` and returned there.
 
 **Example questions:**
 
