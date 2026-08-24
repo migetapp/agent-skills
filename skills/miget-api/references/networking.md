@@ -124,7 +124,7 @@ the first site-to-site connection, which is what pays for its address.
 ## VPN endpoints
 
 - `GET /api/v1/vpcs/{uuid}/vpn_gateways` - List the terminators enabled on the VPC
-- `POST /api/v1/vpcs/{uuid}/vpn_gateways` - Enable one. `kind` is `wireguard`, `tailscale` or `cloudflare`; one of each per VPC. Cloudflare needs `organization`, `client_id` and `client_secret`; Tailscale needs `auth_key`. Those credentials are stored encrypted and **never returned by any endpoint**. Tailscale's `tag` and `accept_routes` are accepted and stored but are **not sent to the platform today** — they change nothing, so set the ACL in your own tailnet
+- `POST /api/v1/vpcs/{uuid}/vpn_gateways` - Enable one. `kind` is `wireguard`, `tailscale` or `cloudflare`; one of each per VPC. Cloudflare needs `organization`, `client_id` and `client_secret`; Tailscale needs `auth_key`. Those credentials are stored encrypted and **never returned by any endpoint**. Tailscale takes its tag from the auth key, so create that key tagged, reusable and ephemeral
 - `DELETE /api/v1/vpcs/{uuid}/vpn_gateways/{gateway_uuid}` - Disable it, revoking every device on it. **422** while site-to-site connections still terminate on it
 - `GET /api/v1/vpcs/{uuid}/vpn_users` - List the WireGuard devices, with the address each answers to
 - `POST /api/v1/vpcs/{uuid}/vpn_users` - Register a device. `name` is lowercase letters, numbers and hyphens. **422** if WireGuard is not enabled first
@@ -152,7 +152,7 @@ Only **Cloudflare WARP and Tailscale** normally need explicit routes: WireGuard'
 client pool and an IPsec connection's remote selectors are derived by the platform
 from the gateways themselves. The endpoint accepts every gateway kind anyway, to
 match the dashboard — but a route naming a gateway that is not running is dropped
-rather than installed, so an unnecessary one is inert rather than harmful.
+rather than installed, so an unnecessary one carries no traffic and does no harm.
 
 - `GET /api/v1/vpcs/{uuid}/peer_routes` - List staged and applied routes
 - `POST /api/v1/vpcs/{uuid}/peer_routes` - Stage one (`cidr`, `gateway_kind`, optional `description`). Every kind is accepted, but in practice only `cloudflare` and `tailscale` need one. Staging changes nothing yet
