@@ -34,7 +34,7 @@ These are the platform's fixed rules. Most failed first deployments trace back t
 | **`name` is server-assigned and always suffixed** | The server appends a random suffix to whatever `name` you send — `wall` comes back as `wall-pfhqv`, and a resource is `migetmxq`. Apps, addons, services, stacks and buckets all work this way. **Secret files go further** — you cannot send a name at all, only `filename` and `text`, and the whole name is generated server-side (`secret-file-gfeey`). **The suffixed `name` is the identifier everywhere**: public URLs, Git remote paths, connection variable keys. `service_name` (the unsuffixed form) appears in exactly one place, `internal_url`, and `label` is display text with no addressing role. Never reconstruct any of these from the name you sent, and never strip a suffix that looks like noise — read the field back and use it verbatim. |
 | **`state` mixes two vocabularies** | On apps, addons and services `state` reports the platform lifecycle while the object is provisioning and the raw **Kubernetes** status once it is up. There is no `active`, and a healthy database reports **`healthy`** (storage reports **`bound`**) — only an *app* reports `running`. Never poll for one hard-coded string; see "Reading `state`". |
 | **Addon vs standalone service** | An addon's lifecycle is tied to its app and is the right default — deleting the app deletes it. A standalone service outlives any single app. Note that explicit mounting works only for `shared_storage`; a shared database is shared by pointing several apps at its connection variables, not by mounting it. |
-| **Billing is not on the API — and deleting is not cancelling** | There is no endpoint that cancels a subscription, changes a plan's payment, suspends or deletes a workspace. Those are dashboard-only, on purpose. The trap is `DELETE /api/v1/resources/{uuid}`: it destroys the resource and everything on it, but the **subscription keeps charging** for the workspace plan and any other resource. Deleting things over the API never stops a bill. Send the user to the dashboard — see "Stopping the bill". |
+| **Billing is not on the API — and deleting is not cancelling** | There is no endpoint that cancels a subscription, changes a plan's payment, suspends or deletes a workspace. Those are dashboard-only, on purpose. The trap is `DELETE /api/v1/resources/{uuid}`: it destroys the resource and everything on it, but the **subscription keeps charging** for the workspace plan and any other resource. Deleting things over the API never stops a bill. Send the user to the dashboard — see "Stopping the bill" in `references/workspace.md`. |
 | **A compose file means a Stack** | A repository with `docker-compose.yml` is a Stack, not an App, and uses an entirely different set of endpoints. Do not try to force it into a single app. |
 
 ---
@@ -179,7 +179,7 @@ Before asking anything, read the repository. Most of a deployment plan is alread
 
 Derive these rather than asking. Read live values from `GET /api/v1/plans` and `GET /api/v1/regions` — never quote a price from memory.
 
-**Region.** The platform has no default region. Prefer, in order: the region of a resource the user already owns; then the region implied by where they are (North America → `us-east-1`, everywhere else → `eu-east-1`, which is the same fallback the platform uses at signup). Say which you picked and offer to change it. This does not apply to static sites, which accept `eu-east-1` only — see "Static Sites".
+**Region.** The platform has no default region. Prefer, in order: the region of a resource the user already owns; then the region implied by where they are (North America → `us-east-1`, everywhere else → `eu-east-1`, which is the same fallback the platform uses at signup). Say which you picked and offer to change it. This does not apply to static sites, which accept `eu-east-1` only — see `references/static-sites.md`.
 
 **Resource.** Reuse an existing resource with enough free RAM before creating a new one — `GET /api/v1/resources`. A new resource is a new monthly charge; reusing one is free. When you do need a new one, pick the **cheapest plan from `GET /api/v1/plans` whose `ram_size` and `disk_size` cover the app plus every addon you are about to attach**, with a little headroom — the app and its databases all draw on the same resource. Size on RAM and disk only: CPU is not part of this arithmetic (see Platform Constraints). Do not reach for a larger plan speculatively; resizing later is easy.
 
@@ -287,7 +287,7 @@ A deployment reaching `completed` means the image built and the pods started. It
 
 1. Poll `GET /api/v1/apps/{uuid}/deployments/{id}` until the status settles.
 2. Request the app's URL.
-3. If that fails, pull build logs from `GET /api/v1/apps/{uuid}/deployments/{id}/logs`, and runtime logs from the Loki API (see "Monitoring & Observability" — runtime logs are not on the REST API).
+3. If that fails, pull build logs from `GET /api/v1/apps/{uuid}/deployments/{id}/logs`, and runtime logs from the Loki API (see `references/observability.md` — runtime logs are not on the REST API).
 4. Work the table below.
 5. Fix and redeploy, or tell the user precisely what is wrong. Never report a deployment as successful without having checked the URL.
 

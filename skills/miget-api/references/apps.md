@@ -39,7 +39,7 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - Apps can have **cronjobs** (scheduled tasks)
 - Apps can have **domains** (custom domains)
 - Apps can have **environment variables** (vars)
-- Apps can have **ports** (exposed ports). Port `5000` is fixed: HTTP traffic on the app's `*.migetapp.com` URL is always served from port `5000` — the app must listen on `5000`, and this port cannot be removed or changed. Additional TCP/UDP ports can be added for custom protocols; they are **private by default** and can be exposed publicly via the expose endpoint (see workflow 9, and https://docs.miget.com/networking/ports for the full list of supported ports).
+- Apps can have **ports** (exposed ports). Port `5000` is fixed: HTTP traffic on the app's `*.migetapp.com` URL is always served from port `5000` — the app must listen on `5000`, and this port cannot be removed or changed. Additional TCP/UDP ports can be added for custom protocols; they are **private by default** and can be exposed publicly via the expose endpoint (see "Manage App Ports" below, and https://docs.miget.com/networking/ports for the full list of supported ports).
 - Apps can be **public or private** (`private_access`): a private app has no public ingress and is reachable only inside the workspace network. Settable on create/update (default `false`); returned in the app response.
 - Apps have an **internal URL** for app-to-app and addon connections, returned as `internal_url` on the app response in the form `<service_name>.<resource-name>.<region-code>.migetapp.internal:5000`. Traffic from other apps requires `allow_connections: true` on the **destination** app (default `false`, set via `PUT /apps/{uuid}/security`); once enabled, other applications on the same resource (miget) can reach it at its `internal_url`.
 - Apps also have a **public URL**, returned as `public_url` on the app response in the form `https://<name>.<region-code>.migetapp.com`. The region comes from the compute resource the app runs on, and since `resource_id` is required at creation, every app has one. It is built from `name`, not `label` or `service_name` — and because the server appends a random suffix to `name` at creation, the only reliable way to learn an app's URL is to read `public_url` back from the response. An app with `private_access: true` has no public ingress, so its `public_url` will not answer. Custom domains are **not** included here; they are listed separately under `GET /apps/{uuid}/domains`, which returns `[]` for an app that only has its platform URL.
@@ -194,7 +194,7 @@ Each `deployment_method` requires different fields in `deployment_config`:
 | `dockerfile_path` | string | `"./Dockerfile"` | Path to Dockerfile in the repository |
 | `build_context` | string | `"."` | Docker build context directory |
 
-**Before you choose `git_push` at all.** It is the method for code with no remote. If the repository already has one, `github` or `public_git` deploys from it with no credential handling, and `github` additionally gives auto-deploy and review apps — see "Choosing Defaults". Check `git remote -v` first.
+**Before you choose `git_push` at all.** It is the method for code with no remote. If the repository already has one, `github` or `public_git` deploys from it with no credential handling, and `github` additionally gives auto-deploy and review apps — see "Choosing Defaults" in `SKILL.md`. Check `git remote -v` first.
 
 **Helping the user deploy a `git_push` app — SSH first.** There are two ways to authenticate, and they are not equally convenient. **Prefer SSH.** It uses the SSH key already on the user's account, needs no Git token, and every step is doable over the API. Fall back to HTTPS only when SSH genuinely will not work.
 
@@ -237,7 +237,7 @@ Each `deployment_method` requires different fields in `deployment_config`:
 
 **For a directory that is not yet a repository**, prefix either option with `git init`, `git add .`, and `git commit -m "initial"`.
 
-Either way, the push triggers a build and deploy — monitor it via `GET /api/v1/apps/{uuid}/deployments` (see workflow 2).
+Either way, the push triggers a build and deploy — monitor it via `GET /api/v1/apps/{uuid}/deployments` (see "Monitor Deployment" below).
 
 **`public_git`** - Deploy from a public Git repository URL.
 
