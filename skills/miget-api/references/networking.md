@@ -76,7 +76,9 @@ the platform derives those and answers a moment later. Poll
 `GET /api/v1/vpcs/{uuid}` until `status` is `active`, then read them.
 
 **It already owns a subnet.** That same reply carries a ready-made subnet named
-`default` covering the first `/24` of the range. List the subnets before creating
+`default`. It is not the first `/24` — the platform keeps the start of the range for
+the router, the resolver and the VPN terminators — so on a `10.224.0.0/16` VPC the
+default subnet is `10.224.1.0/24`. List the subnets before creating
 one: attaching a workload usually needs no subnet call at all, and carving
 `10.224.1.0/24` by hand is refused with `422` for overlapping the subnet you
 already have.
@@ -163,7 +165,7 @@ will cost before you do.
 
 - `GET /api/v1/vpcs/{uuid}/site_connections` - List the tunnels, each with the public address it holds
 - `POST /api/v1/vpcs/{uuid}/site_connections` - Create one. `name`, `remote_cidrs`, and `tunnels` (each `remote_gateway` plus `psk` from the far side's configuration); optional `peer_asn`
-- `DELETE /api/v1/vpcs/{uuid}/site_connections/{connection_uuid}` - Tear it down and release the address
+- `DELETE /api/v1/vpcs/{uuid}/site_connections/{connection_uuid}` - Tear it down. This stops the $199/mo charge but does **not** release the public address — that is held by the IPsec gateway, which goes only with the VPC
 
 Three things to say out loud before calling this:
 
@@ -179,6 +181,12 @@ stored encrypted and never returned.
 
 ## Billing
 
-The VPC itself is included on paid plans. The VPN is the add-on: **$29/mo** for a
-VPC running WireGuard, Tailscale or WARP — once per VPC however many of the three
-it runs — plus **$199/mo** per site-to-site tunnel. Enterprise has it included.
+The VPC itself is included on paid plans. The VPN is the add-on:
+
+- **$29/mo per enabled gateway.** Counted per gateway, not per VPC — a VPC running
+  both WireGuard and Tailscale is charged twice, as are two VPCs each running
+  WireGuard.
+- **$199/mo per site-to-site tunnel**, counted from the tunnels that exist.
+
+Enterprise has both included. Deleting a tunnel stops its charge; the public
+address it held is only returned to the region's pool when the VPC is deleted.
