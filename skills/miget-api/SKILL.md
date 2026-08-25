@@ -1,7 +1,7 @@
 ---
 name: miget-api
 description: Deploy and manage apps, databases, buckets, private networks and services on Miget PaaS. Covers authentication, resource provisioning, deployments, add-ons, domains, environment variables, VPCs and VPN, and every API endpoint. Use this skill whenever the user mentions Miget, deploying an app to Miget, a miget/resource, or asks to ship, host, scale or debug an application on the Miget platform — including when they only describe the goal ("get this Rails app online", "give my database a private address") without naming Miget.
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Miget API - Guide for AI Agents
