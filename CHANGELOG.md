@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 — 2026-08-25
+
+Webhook payloads say which resource an event came from and why a deployment failed, and the retry section stops promising that a broken endpoint is left alone.
+
+- **A failed deployment now says why.** `deploy_ended` carries `data.message`, the platform's own wording for the failure rather than the raw cluster error where it recognises one, and `null` on a deployment that did not fail. Until now the only way to learn why a deploy failed was to go and read the logs
+- **App lifecycle events name the resource and its labels.** `app_state_changed`, `app_unhealthy`, `app_crash_loop`, `app_stopped`, `app_blocked` and `scaling_limit_reached` all carry `data.resource_name` and `data.labels` — an empty array where none are set — so a receiver can route on the environment an application runs in without a second call to look it up
+- **`app_state_changed` enumerates its states.** `started`, `stopped`, `failed` or `restart_scheduled`, and a restart is two events rather than one: `restart_scheduled` when it is asked for, and the `started` that follows once the application is running again
+- **A broken endpoint is disabled, which the skill said it never was.** Three consecutive events that exhaust every attempt take the webhook out of service and email the workspace; `PATCH /api/v1/webhooks/{uuid}` with `enabled: true` puts it back. An integration that treated its subscription as permanent was working from a promise the platform does not make
+
 ## 1.0.0 — 2026-08-24
 
 The skill becomes a core plus reference files, and private networking arrives on the API.

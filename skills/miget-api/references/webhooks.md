@@ -68,6 +68,7 @@ There is no separate build event — on Miget the build and the deployment are o
     "app_id": "<app uuid>",
     "app_name": "my-api-x7k2p",
     "status": "completed",
+    "message": null,
     "commit_sha": "abc123",
     "commit_message": "Fix the thing",
     "branch": "main",
@@ -75,6 +76,10 @@ There is no separate build event — on Miget the build and the deployment are o
   }
 }
 ```
+
+`message` carries why a deployment failed, in the platform's own wording rather than the raw cluster error where one is recognised. It is `null` on a deployment that did not fail.
+
+**App lifecycle events name the resource.** `app_state_changed`, `app_unhealthy`, `app_crash_loop`, `app_stopped`, `app_blocked` and `scaling_limit_reached` carry `data.resource_name` and `data.labels` — the resource the application runs on and the labels set on it, an empty array when it has none. `app_state_changed` also carries `data.state`, one of `started`, `stopped`, `failed` or `restart_scheduled`; `restart_scheduled` is sent when a restart is requested, and the `started` that follows once it is running is a second event.
 
 **Verifying a delivery.** Requests follow the [Standard Webhooks](https://standardwebhooks.com) specification, so any Standard Webhooks library verifies them as-is. Three headers accompany every POST:
 
@@ -86,7 +91,7 @@ There is no separate build event — on Miget the build and the deployment are o
 
 The signature is `HMAC-SHA256(key, "{webhook-id}.{webhook-timestamp}.{body}")`, base64-encoded, where `key` is the base64-decoded portion of the secret after the `whsec_` prefix. Compare with a constant-time comparison, and reject deliveries whose `webhook-timestamp` is more than a few minutes old — that is what makes a captured request non-replayable.
 
-**Retries.** A non-2xx response is retried with exponential backoff over roughly **24 hours** — 9 attempts in total, spaced 30s, 2m, 8m, 30m, 1h, 3h, 8h and 12h apart with jitter. Endpoints should be idempotent: deduplicate on `id`, which is stable across retries of the same event *and* across manual replays. A failing endpoint is never auto-disabled.
+**Retries.** A non-2xx response is retried with exponential backoff over roughly **24 hours** — 9 attempts in total, spaced 30s, 2m, 8m, 30m, 1h, 3h, 8h and 12h apart with jitter. Endpoints should be idempotent: deduplicate on `id`, which is stable across retries of the same event *and* across manual replays. Three consecutive events that exhaust every attempt disable the webhook and email the workspace; re-enable it with `PATCH /api/v1/webhooks/{uuid}` and `enabled: true` once the endpoint is back.
 
 **Delivery history.**
 
