@@ -176,10 +176,10 @@ Miget uses **role-based access control (RBAC)** within workspaces.
 
 ## Common Permissions
 
-- `apps:view` - View applications
-- `apps:manage` - Create, update and delete applications
-- `apps:deploy` - Deploy applications
-- `apps:operate` - Operate applications (start/stop, manage addons)
+- `apps:view` - View applications, their logs and their deployments
+- `apps:manage` - Create and delete applications, manage their domains and TLS certificates, and delete or reset a database
+- `apps:deploy` - Deploy applications, start, stop and restart them, change their settings, and create git tokens
+- `apps:operate` - Add-ons, cron jobs, ports and their public access, environment variables, secret files and settings
 - `resources:view` - View resources
 - `resources:operate` - Operate resources
 - `resources:manage` - Create, update and delete resources
@@ -189,14 +189,17 @@ Miget uses **role-based access control (RBAC)** within workspaces.
 - `services:view` - View services
 - `services:operate` - Operate services
 - `services:manage` - Create, update and delete services
-- `buckets:view` - View buckets and list objects
-- `buckets:operate` - Operate buckets (upload, download, manage policy/ACL)
+- `buckets:view` - View buckets, list objects and download them
+- `buckets:operate` - Upload, rename and delete objects, manage policy/ACL, change settings
 - `buckets:manage` - Create and delete buckets
+- `network:view` - View private networks, their subnets and their attachments
+- `network:operate` - Subnets, attachments, peer routes, WireGuard devices, and renaming a VPC
+- `network:manage` - Create and delete private networks, VPN gateways and site-to-site tunnels
 - `workspace:general` - Manage general workspace settings, API tokens and webhooks
 - `workspace:security` - Manage workspace security settings
 - `workspace:credentials` - Manage git and registry credentials
 - `workspace:integrations` - Manage workspace integrations
-- `workspace:billing` - Manage the plan and billing
+- `workspace:billing` - Manage the plan, billing, invoices and orders
 - `workspace:members` - Manage workspace members
 - `workspace:roles` - Manage workspace roles
 

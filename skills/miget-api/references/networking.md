@@ -48,14 +48,17 @@ that the region has a small, finite number of.
 
 ## Endpoints
 
-VPCs use their own `network:*` permissions: read = `network:view`, attach/detach =
-`network:operate`, everything else = `network:manage`. Site-to-site connections
-are the exception and need the workspace **owner**.
+VPCs use their own `network:*` permissions. Reading is `network:view`. Everything
+that runs a network you already have is `network:operate`: subnets, attachments,
+peer routes, WireGuard devices and their configuration, and renaming a VPC.
+Creating or deleting a VPC, switching a VPN gateway on or off, and adding a
+site-to-site tunnel are `network:manage` — they are what costs money or spends a
+public address.
 
 - `GET /api/v1/vpcs` - List the workspace's private networks
 - `POST /api/v1/vpcs` - Create one. `region_id` is required; `name` defaults to `default` and `cidr_v4` to `10.224.0.0/16`. A range that is not RFC1918, is smaller than `/22`, or overlaps a platform network is refused with **422** naming the conflict
 - `GET /api/v1/vpcs/{uuid}` - Get one, including `resolver_v4` and `vpn_pool_v4`
-- `PUT /api/v1/vpcs/{uuid}` - Change `label` or `is_default`. The name and the ranges are fixed at creation, because the platform derives the whole address plan from them on every action. Making this the region's default while another VPC holds it is **422** — clear that one first
+- `PUT /api/v1/vpcs/{uuid}` - Change `label`, which is required. The name and the ranges are fixed at creation, because the platform derives the whole address plan from them on every action
 - `DELETE /api/v1/vpcs/{uuid}` - Delete it. **422** while any subnet remains — remove those first
 - `GET /api/v1/vpcs/{uuid}/subnets` - List subnets
 - `POST /api/v1/vpcs/{uuid}/subnets` - Create one (`name`, plus `cidr_v4` unless `family` is `ipv6`). Optional `family` — `dual` (default), `ipv4` for no IPv6 at all, `ipv6` for no IPv4 — and `public`, default `true`. `cidr_v6` is derived from the VPC's own when omitted. The range must sit inside the VPC's own and must not overlap a sibling
@@ -175,7 +178,7 @@ Three things to say out loud before calling this:
   also claims one of the region's public IPv4 addresses for that VPC's IPsec
   gateway; a second tunnel on the same VPC reuses the gateway and its address
   rather than claiming another.
-- Only the **workspace owner** may call it. Anyone else gets `403`.
+- It takes `network:manage`. A role holding only `network:operate` or `network:view` gets `403`.
 - A region has a small pool of these addresses. When it is empty the answer is
   `422`, not a queue.
 

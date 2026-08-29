@@ -31,7 +31,7 @@ An **Application** is a deployable service (web app, API, worker, etc.).
   - `git_push` - Push to Miget-hosted Git remote
   - `public_git` - Public Git repository
   - `github` - GitHub repository (via GitHub App)
-  - `container_registry` - Pre-built container image from a registry (Docker Hub, GHCR, etc.)
+  - `container_registry` - Pre-built container image from a registry (Docker Hub, GHCR, etc.). Not available on a free-plan resource
   - `parent_image` - Inherit image from parent app
   - `kamal` - Deploy from local machine using Kamal
 - Apps belong to a **Project** (for organization)
@@ -109,11 +109,11 @@ For config a container needs **on disk** rather than in the environment — `ser
 ## App Ports
 
 - `GET /api/v1/apps/{uuid}/ports` - List all ports for an app
-- `POST /api/v1/apps/{uuid}/ports` - Create a new port (requires apps:manage, not available on free plan)
+- `POST /api/v1/apps/{uuid}/ports` - Create a new port (requires apps:operate, not available on free plan)
 - `GET /api/v1/apps/{uuid}/ports/{port_id}` - Get port details
 - `DELETE /api/v1/apps/{uuid}/ports/{port_id}` - Delete a port
-- `PATCH /api/v1/apps/{uuid}/ports/{port_id}/expose_publicly` - Expose a port publicly (requires apps:manage, not available on free plan)
-- `PATCH /api/v1/apps/{uuid}/ports/{port_id}/make_private` - Make a port private (requires apps:manage)
+- `PATCH /api/v1/apps/{uuid}/ports/{port_id}/expose_publicly` - Expose a port publicly (requires apps:operate, not available on free plan)
+- `PATCH /api/v1/apps/{uuid}/ports/{port_id}/make_private` - Make a port private (requires apps:operate)
 
 ## App Cronjobs
 
@@ -166,7 +166,7 @@ Workspace-level Git credentials (GitHub App installs / personal access tokens) u
 **Optional but important:**
 - `ram_size` (float) - RAM allocation in MiB
 - `cpu_size` (float) - CPU allocation in cores
-- `deployment_method` (string) - `"git_push"`, `"public_git"`, `"github"`, `"container_registry"`, `"parent_image"`, or `"kamal"`. Note: the enum value is `container_registry` (not `docker_registry`).
+- `deployment_method` (string) - `"git_push"`, `"public_git"`, `"github"`, `"container_registry"`, `"parent_image"`, or `"kamal"`. Note: the enum value is `container_registry` (not `docker_registry`). `container_registry` requires a paid resource — on a free-plan resource every write is rejected with `422`: creating an app with it, switching an existing app onto it, and changing the configuration (the image tag included) of an app already deployed from a registry.
 - `deployment_config` (object) - Configuration specific to the chosen deployment method (see table below)
 - `app_vars_attributes` (array) - Environment variables to set at creation (array of `{key, value}` objects)
 - `private_access` (boolean) - Restrict the app to private access only — no public ingress, reachable only inside the workspace network (default `false`). Also accepted on `PUT /api/v1/apps/{uuid}`.
@@ -373,7 +373,7 @@ Typical values: `npx drizzle-kit migrate` (Drizzle), `alembic upgrade head` (Ale
 
 **Monorepos.** Set `project_path` to the subdirectory holding the app (for example `apps/api`). The build then treats that directory as its root.
 
-**`container_registry`** - Deploy a pre-built container image from a registry (Docker Hub, GHCR, etc.).
+**`container_registry`** - Deploy a pre-built container image from a registry (Docker Hub, GHCR, etc.). **Paid resources only** — on a free-plan resource every write is rejected with `422`, including a tag change on an app that is already deployed this way.
 
 ```json
 {
@@ -723,10 +723,11 @@ DELETE /api/v1/apps/{app-uuid}/ports/{port-id}
 - `public` (boolean) - Whether the port should be publicly accessible (default: `false`)
 
 **Important notes:**
-- Requires `apps:manage` permission
+- Requires `apps:operate` permission
 - Port management is not available on free plan resources
 - Ports can be exposed publicly or made private after creation using separate endpoints
 - Port `5000` is fixed for HTTP traffic on the app's `*.migetapp.com` URL — it is auto-created, cannot be removed or changed, and the app must listen on it. Use this endpoint to add extra TCP/UDP ports for custom protocols; they are **private by default** — use `expose_publicly` to make them reachable from outside the cluster. See https://docs.miget.com/networking/ports for the full list of supported ports.
+- **Read the address back, do not construct it.** A public port answers with `public_endpoint` — `hostname:port`, the thing to hand the user or put in a connection string — plus `external_port` and the `endpoint_hostname` / `endpoint_ipv4_primary` / `endpoint_ipv6_primary` fields for the proxy it landed on. The external port is assigned from a pool, so it is never the internal one, and a private port returns `null` for all of them.
 
 **Ask only what you cannot derive:**
 - "What internal port number? (1-65535)"
@@ -838,7 +839,7 @@ Stores credentials for pulling images from a private registry. The returned `uui
 - `basic_auth_password` (string) - Password for Basic Authentication (required when `basic_auth_enabled` is true, leave blank to keep current password)
 
 **Constraints:**
-- Requires `apps:manage` permission
+- Requires `apps:deploy`, `apps:operate` or `apps:manage`
 - When `basic_auth_enabled` is true, both `basic_auth_username` and `basic_auth_password` are required (unless password already exists and you want to keep it)
 - The app response returns `basic_auth_enabled` so you can tell whether Basic Auth is enforced, but Basic Auth **credentials are never returned** by the API.
 
