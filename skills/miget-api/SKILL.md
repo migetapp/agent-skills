@@ -1,7 +1,7 @@
 ---
 name: miget-api
 description: Deploy and manage apps, databases, buckets, private networks and services on Miget PaaS. Covers authentication, resource provisioning, deployments, add-ons, domains, environment variables, VPCs and VPN, and every API endpoint. Use this skill whenever the user mentions Miget, deploying an app to Miget, a miget/resource, or asks to ship, host, scale or debug an application on the Miget platform — including when they only describe the goal ("get this Rails app online", "give my database a private address") without naming Miget.
-version: 1.0.1
+version: 1.0.2
 ---
 
 # Miget API - Guide for AI Agents
@@ -203,8 +203,8 @@ Treat these as starting points, not platform rules — raise them if the app is 
 |---|---|---|
 | A GitHub remote, or the user names a GitHub repo | `github` | The only method with **auto-deploy on push** and **review apps** for pull requests. Needs a `credential_id` from `GET /api/v1/git_credentials`; if the workspace has none, having the user install the Miget GitHub App once is a smaller ask than a token they must re-issue whenever it is lost. |
 | A remote on another host, or a public repo with no GitHub App | `public_git` | Deploys straight from the URL, no credential exchange. Private repos take a `credential_id`. |
-| The image is already built and pushed to a registry | `container_registry` | There is nothing left to build. |
-| A Dockerfile the user builds and ships themselves | `kamal` or `container_registry` | Their pipeline already produces the artifact. |
+| The image is already built and pushed to a registry | `container_registry` | There is nothing left to build. Paid resources only — on a free resource the request is rejected with `422`. Compose stacks are exempt: a bare `image:` service deploys this way on any plan. |
+| A Dockerfile the user builds and ships themselves | `kamal` or `container_registry` | Their pipeline already produces the artifact. `container_registry` is paid-resource only; `kamal` is not. |
 | No remote at all — local-only code | `git_push` | The fallback. See the `git_push` notes for the SSH-first flow. |
 
 Preview environments (review apps) work only for `github` apps — so a repo that will want PR previews should be on `github` from the start rather than migrated later. You configure them over the API with `PUT /api/v1/apps/{uuid}/preview_environments/config`; the environments themselves are created by GitHub webhooks, never by you.
@@ -227,7 +227,7 @@ It needs **a saved payment card**, exactly like the free plan and with the same 
 
 Once a trial is running, adding a resource or moving up to a dearer plan **ends it immediately and bills the new total that day** — a downgrade or a sideways move does not. Say this before an agent "upgrades while it is free anyway".
 
-**The free plan.** One free resource per user, personal workspaces only, and it is small: 0.1 core, 256 MiB RAM, 1 GiB disk — so the app **and every addon on it** must together fit inside 256 MiB of RAM and 1 GiB of disk. It also cannot use public custom ports, autoscaling, cron jobs, or Postgres backups, and addon CPU is pinned to 0.1 regardless of what you request. It suits a first deploy or a demo; say plainly when a project has outgrown it rather than trying to squeeze it in.
+**The free plan.** One free resource per user, personal workspaces only, and it is small: 0.1 core, 256 MiB RAM, 1 GiB disk — so the app **and every addon on it** must together fit inside 256 MiB of RAM and 1 GiB of disk. It also cannot use public custom ports, autoscaling, cron jobs, Postgres backups, or `container_registry` deployments, and addon CPU is pinned to 0.1 regardless of what you request. It suits a first deploy or a demo; say plainly when a project has outgrown it rather than trying to squeeze it in.
 
 **An app plus a database does fit on the free plan.** A 128 MiB app (the floor) and a Postgres addon at its 128 MiB default come to exactly 256 MiB, with the addon's 0.5 GiB disk inside the 1 GiB allowance. That is tight and worth saying out loud — no headroom to raise either later without upgrading — but it is a valid configuration and the platform will create it. The 0.1 core is *not* divided between them, so it is never the reason to refuse: if you push back on a free-plan Node + Postgres deploy, push back on the 256 MiB, not on the CPU.
 
@@ -544,7 +544,7 @@ confirm once.
    - `git_push` - Push to Miget-hosted Git remote
    - `github` - Best for GitHub repositories (supports auto-deploy on push)
    - `public_git` - For public Git repositories
-   - `container_registry` - For pre-built container images from a registry (Docker Hub, GHCR, etc.)
+   - `container_registry` - For pre-built container images from a registry (Docker Hub, GHCR, etc.). Not available on a free-plan resource
    - `parent_image` - For inheriting images from parent apps
    - `kamal` - For deploying from local machine using Kamal (`kamal deploy`). The app must be created with Kamal from the start - you cannot switch an existing app to Kamal. Registry password is auto-generated.
 
