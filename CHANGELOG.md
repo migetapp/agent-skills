@@ -2,11 +2,13 @@
 
 ## 1.0.3 — 2026-09-11
 
-Free-plan applications now sleep when idle, and the skill says what that means for an agent reading `state` or waiting on a response. Cancelling a subscription leaves a five-day window before anything is deleted, and a suspended workspace says in its `403` why it was suspended and what still works.
+Free-plan applications now sleep when idle, and the skill says what that means for an agent reading `state` or waiting on a response. Cancelling a subscription leaves a five-day window before anything is deleted, and a suspended workspace says in its `403` why it was suspended and what still works. Cloning answers to the permission that creates an application, and a preview-environment config is held to the projects its resource accepts.
 
 - **A free-plan application sleeps after 30 minutes without traffic.** It is scaled to zero along with its databases, and `state` reads `sleeping`. The next request wakes it and is answered with `503` while it starts — a wake-up in progress, not a failed deploy. The skill previously said nothing on the platform was ever put to sleep
 - **An application left asleep loses its add-ons.** Thirty days of continuous sleep starts a 14-day grace period, and on day 44 the add-ons are deleted, databases included, and the application is stopped. Any wake resets the clock. A standalone free PostgreSQL service sleeps and expires on the same terms
 - **Sleeping and waking send no `app_state_changed`,** so the event keeps meaning that somebody started, stopped or restarted the application
+- **Cloning an application takes `apps:manage`,** the permission creating one already takes; it used to accept `apps:deploy` or `apps:operate`. A resource somebody else created in the workspace is no longer refused with `422`
+- **A preview environment config must run on a resource that accepts its project.** While `enabled` is true, `PUT /api/v1/apps/{uuid}/preview_environments/config` refuses with `422` a resource assigned to other projects, whether it is `resource_id` or the app's own in `parent` mode. A config whose resource is assigned elsewhere after it was saved is turned off at the next pull request, and the reason is sent by email
 - **Cancelling a subscription suspends the workspace when the paid period ends, and deletes its resources five days later.** Restoring the subscription within those five days brings everything back, with applications left stopped for the user to start
 - **A free-plan resource is untouched by a cancellation,** and survives the deletion at the end of the window
 - **A suspended workspace's `403` says why, and what still works.** An unpaid subscription still allows `GET` and `DELETE`; a subscription that has ended allows `GET` during the five-day window; a suspension for abuse, or for any other reason, allows nothing

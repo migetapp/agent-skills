@@ -58,7 +58,7 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 - `DELETE /api/v1/apps/{uuid}` - Delete application
 - `PUT /api/v1/apps/{uuid}/security` - Update security settings (network connectivity, Basic Authentication)
 - `PATCH /api/v1/apps/{uuid}/state` - Change app state (schedule_start/schedule_stop/schedule_restart)
-- `POST /api/v1/apps/{uuid}/clone` - Clone an application. Copies nothing by default beyond the app's own settings — env vars, secret files, scaling, health checks, security, add-ons and cronjobs are each opt-in. See the runbook under Endpoint Reference
+- `POST /api/v1/apps/{uuid}/clone` - Clone an application. Copies nothing by default beyond the app's own settings — env vars, secret files, scaling, health checks, security, add-ons and cronjobs are each opt-in. Requires `apps:manage`. A resource assigned to projects other than the target is refused with `422`. See the runbook under Endpoint Reference
 - `PUT /api/v1/apps/{uuid}/deployment` - Update deployment method and configuration (switch methods, update Kamal SSH keys). `deployment_config_attributes` is a **patch**: fields you omit keep their stored value, and a field sent as `""` is cleared. Sending a *different* `deployment_method` builds the config from scratch, so supply every field that method needs.
 - `POST /api/v1/apps/{uuid}/deploy` - Trigger deployment (optional: custom_tag, commit_sha, branch). Not used for Kamal apps. Returns `409 Conflict` if a deployment is already in progress — poll `GET /apps/{uuid}/deployments` and retry once it settles. On a `github` app, a `commit_sha` that does not exist in the configured repository is rejected with `422` before any build starts, so push the commit first and pass a SHA from the same repository the app is configured with (a SHA from a fork or a squashed/force-pushed branch will not resolve). Other deployment methods do not check the SHA.
 - `PUT /api/v1/apps/{uuid}/health_checks` - Update health check probes (liveness, readiness, startup)
@@ -135,7 +135,7 @@ Ephemeral clones of an app, one per GitHub pull request or branch. **Only for `g
 - `DELETE /api/v1/apps/{uuid}/preview_environments/{id}` - Schedule teardown. Returns **202**; the entry stays listed as `destroying` until it finishes
 - `POST /api/v1/apps/{uuid}/preview_environments/{id}/redeploy` - Redeploy the commit it already tracks. Returns **202**. Use it to retry a `failed` environment — new commits deploy on their own while `auto_deploy_on_push` is on
 - `GET /api/v1/apps/{uuid}/preview_environments/config` - Read the config. **404 when the app has never been configured** — that is the normal empty state, not an error; PUT to create it
-- `PUT /api/v1/apps/{uuid}/preview_environments/config` - Create the config the first time, update it after. Omitted fields keep their value
+- `PUT /api/v1/apps/{uuid}/preview_environments/config` - Create the config the first time, update it after. Omitted fields keep their value. While `enabled` is true, a resource assigned to projects other than the target — `project_id`, or the app's own when omitted — is refused with `422`, whether it is `resource_id` or the app's own resource in `parent` mode. A config saved before its resource was assigned to another project is turned off (`enabled: false`) at the next pull request, and the reason is sent by email and in-app notification — pick another resource or project, then enable it again
 
 ## Container Registry Credentials
 
