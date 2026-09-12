@@ -33,7 +33,7 @@ Miget uses **workspace-based multi-tenancy**. Each user can belong to multiple w
 
 | What the user wants | Where they go | What it does |
 |---|---|---|
-| Stop paying entirely | **Billing** in the sidebar → **Cancel Subscription** on the subscription card | Charges stop now. Everything keeps running until the end of the paid period, then the resources and all their applications, services, buckets and databases are **permanently deleted**. Resumable from the same page until that date. |
+| Stop paying entirely | **Billing** in the sidebar → **Cancel Subscription** on the subscription card | Charges stop now. Everything keeps running until the end of the paid period, then the workspace is suspended and everything in it stopped. Five days later the resources and all their applications, services, buckets and databases are **permanently deleted**. Resumable from the same page until the period ends, and restorable from it during those five days. |
 | Stop paying, **enterprise workspace** | Their account manager, or support@miget.com | There is no cancel button on an enterprise plan and no endpoint behind it — notice period, final invoice and data handover follow the signed agreement. Billing shows an "Ending your contract" note instead. Do not tell an enterprise user to look for a Cancel button; they will not find one. |
 | Drop one resource, keep the rest | **Resources** → pick it → **Settings** → **Delete** | Deletes that resource and everything on it, and takes it off the bill. The subscription continues for the workspace plan and any other resources. |
 | Change plan | **Settings** → **Plan** | |
@@ -43,11 +43,22 @@ Miget uses **workspace-based multi-tenancy**. Each user can belong to multiple w
 Two things to warn about, because a user will not expect either:
 
 - **Deleting applications does not reduce the bill.** Billing is per resource — the capacity applications run on — not per application. An empty resource costs exactly what a full one does. This is the single most common billing surprise, so say it before the user starts deleting apps to save money.
-- **Cancelling ends in deletion, not in a frozen account.** A cancelled workspace is suspended and its workloads stopped, and the resources are then destroyed. Tell the user to export anything they want to keep — there is no undo once it happens.
+- **Cancelling ends in deletion, not in a frozen account.** A cancelled workspace is suspended and its workloads stopped, and five days later the resources are destroyed. Those five days are the whole window: **Billing** → **Restore Subscription** keeps everything, and after them nothing can be recovered. Restoring reopens the workspace with its resources intact; applications are not started for the user, so tell them to start what they want once it is back. Tell them to restore or export within the window.
+
+**A resource that costs nothing is not touched by any of this.** A free-plan resource — and one an admin has taken off the bill — keeps running while the paid ones are stopped, and survives the deletion at the end of the window. Say so when a user asks what they lose by not paying: they keep the free tier, which is also where the workspace lands afterwards.
 
 A workspace can also be **suspended** by the platform — after a cancellation completes, for non-payment, or when an application is blocked for abuse. It is a consequence, never something a user or an agent triggers, and there is no endpoint to lift it.
 
-While suspended, **every** API request for that workspace answers `403`, reads included, with one of two messages: `Your workspace has been suspended. Please contact support to reactivate it.` or, when an application was blocked, `...due to suspicious activity in one of your applications...`. Treat either as terminal — do not retry, do not switch endpoints, and do not report it as a permission problem the user can fix by changing a role. Relay which of the two it was, since they need different people: billing for the first, support for the second.
+What a suspension blocks depends on why it happened:
+
+| Reason | What still works over the API | The `403` message |
+|---|---|---|
+| Unpaid subscription, still being billed | `GET` and `DELETE` — read anything, and delete anything, to cut the bill. The dashboard follows the same rule and adds the plan change | `Your workspace is suspended because the subscription is not paid. Settle it in Billing and everything comes back. Reading and deleting resources stay available in the meantime.` |
+| Subscription ended, inside the five-day window | `GET` only — nothing is being charged, and the resources are what a restore brings back | `Your subscription has ended, so this workspace is read-only until it is restored in Billing. Nothing has been deleted yet.` |
+| Abuse (an application was blocked) | nothing | `Your workspace has been suspended due to suspicious activity in one of your applications. Please contact support to reactivate it.` |
+| Anything else | nothing | `Your workspace has been suspended. Please contact support to reactivate it.` |
+
+Do not report any of these as a permission problem the user can fix by changing a role, and do not retry the blocked call. Relay which one it was, since they need different people: billing for the first, support for the others. On the unpaid one, the reads that still work are worth using — you can show the user what they are about to lose before they decide.
 
 ## Resources (Migets)
 

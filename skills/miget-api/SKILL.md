@@ -1,7 +1,7 @@
 ---
 name: miget-api
 description: Deploy and manage apps, databases, buckets, private networks and services on Miget PaaS. Covers authentication, resource provisioning, deployments, add-ons, domains, environment variables, VPCs and VPN, and every API endpoint. Use this skill whenever the user mentions Miget, deploying an app to Miget, a miget/resource, or asks to ship, host, scale or debug an application on the Miget platform — including when they only describe the goal ("get this Rails app online", "give my database a private address") without naming Miget.
-version: 1.0.2
+version: 1.0.3
 ---
 
 # Miget API - Guide for AI Agents
@@ -231,7 +231,11 @@ Once a trial is running, adding a resource or moving up to a dearer plan **ends 
 
 **An app plus a database does fit on the free plan.** A 128 MiB app (the floor) and a Postgres addon at its 128 MiB default come to exactly 256 MiB, with the addon's 0.5 GiB disk inside the 1 GiB allowance. That is tight and worth saying out loud — no headroom to raise either later without upgrading — but it is a valid configuration and the platform will create it. The 0.1 core is *not* divided between them, so it is never the reason to refuse: if you push back on a free-plan Node + Postgres deploy, push back on the 256 MiB, not on the CPU.
 
-A free resource holding **no apps and no services** is deleted after 30 days of inactivity; one with an app on it is never auto-deleted. Deployed apps currently run continuously on every plan — nothing is idled or put to sleep. Treat that as today's behaviour rather than a promise, and do not build an argument for the free plan on guaranteed uptime.
+A free resource holding **no apps and no services** is deleted after 30 days of inactivity; one with an app on it is never auto-deleted.
+
+**Free-plan apps sleep.** An app on the free plan that has served no HTTP request for 30 minutes is scaled to zero, the databases attached to it are put to sleep with it, and its `state` reads `sleeping`. The next request wakes it, and so does a WebSocket or SSE connection, a connection to one of its databases, or `PATCH .../state` with `schedule_start`. The request that wakes it is answered with **`503`** while the app starts — so a `503` from a free app that was idle is a wake-up in progress, not a broken deploy: retry with a backoff before reporting a failure. A standalone PostgreSQL service on the free plan sleeps the same way after 30 minutes with no client connected, and wakes on the next connection. Paid plans never sleep, and upgrading a resource wakes whatever is asleep on it.
+
+**A free app left asleep loses its add-ons.** After 30 days of continuous sleep, the app's add-ons enter a 14-day grace period; on day 44 they are permanently deleted, databases included, and the app is stopped. A standalone free database follows the same schedule. Workspace admins are emailed on days 23 and 29, when the grace period starts, and when the deletion happens. Any wake resets the clock, and an app with nothing attached is never deleted. Say this before putting data the user cares about on the free plan, and do not build an argument for it on guaranteed uptime.
 
 ### The Plan Card
 
@@ -334,6 +338,7 @@ case "$state" in healthy|bound|running) echo up ;; esac
 
 - **Ready:** `healthy`, `bound`, `running`, `active`
 - **Still working:** `pending`, `processing`, `creating`, `assigned`, `started`, `start_scheduled`, `deploying`, `cloning`
+- **Asleep:** `sleeping` — a free-plan app scaled to zero for lack of traffic, neither stopped nor failed. A request to it wakes it (answered with `503` while it starts); then poll for `running`
 - **Stop polling and report:** `failed`, `failing`, `lost`, `crashloopbackoff`, `problem`, `stopped`, `blocked`
 - **Anything else:** treat as still working, but bound the wait — an unrecognised value is not a reason to loop indefinitely.
 

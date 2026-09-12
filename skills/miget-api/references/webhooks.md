@@ -79,7 +79,7 @@ There is no separate build event — on Miget the build and the deployment are o
 
 `message` carries why a deployment failed, in the platform's own wording rather than the raw cluster error where one is recognised. It is `null` on a deployment that did not fail.
 
-**App lifecycle events name the resource.** `app_state_changed`, `app_unhealthy`, `app_crash_loop`, `app_stopped`, `app_blocked` and `scaling_limit_reached` carry `data.resource_name` and `data.labels` — the resource the application runs on and the labels set on it, an empty array when it has none. `app_state_changed` also carries `data.state`, one of `started`, `stopped`, `failed` or `restart_scheduled`; `restart_scheduled` is sent when a restart is requested, and the `started` that follows once it is running is a second event.
+**App lifecycle events name the resource.** `app_state_changed`, `app_unhealthy`, `app_crash_loop`, `app_stopped`, `app_blocked` and `scaling_limit_reached` carry `data.resource_name` and `data.labels` — the resource the application runs on and the labels set on it, an empty array when it has none. `app_state_changed` also carries `data.state`, one of `started`, `stopped`, `failed` or `restart_scheduled`; `restart_scheduled` is sent when a restart is requested, and the `started` that follows once it is running is a second event. A free-plan application going to sleep, or waking on traffic, sends no `app_state_changed`.
 
 **Verifying a delivery.** Requests follow the [Standard Webhooks](https://standardwebhooks.com) specification, so any Standard Webhooks library verifies them as-is. Three headers accompany every POST:
 
