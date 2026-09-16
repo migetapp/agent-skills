@@ -62,15 +62,15 @@ For PostgreSQL databases, also ask about:
 - `GET /api/v1/apps/{uuid}/addons` - List app addons (includes `role` and `primary_addon_uuid` fields for PostgreSQL addons)
 - `POST /api/v1/apps/{uuid}/addons` - Create addon (PostgreSQL supports `creation_mode`: `fresh` or `external_replica`, and `instances` [1, 3, 5, 7] for HA clusters)
 - `GET /api/v1/apps/{uuid}/addons/{id}` - Get addon details (includes `role`, `primary_addon_uuid`, and `replicas` for PostgreSQL primaries)
-- `PUT /api/v1/apps/{uuid}/addons/{id}` - Update addon (PostgreSQL supports `instances` [1, 3, 5, 7] for scaling cluster nodes)
+- `PUT /api/v1/apps/{uuid}/addons/{id}` - Update addon (PostgreSQL supports `instances` [1, 3, 5, 7] for scaling cluster nodes, boolean `backup_enabled` and `public_access`, and a 6-field cron `scheduled_backup`)
 - `DELETE /api/v1/apps/{uuid}/addons/{id}` - Delete addon (deleting a primary cascades to all its replicas; requires `apps:manage`)
 - `PATCH /api/v1/apps/{uuid}/addons/{id}/state` - Change addon state (process_start/process_stop/process_restart)
 - `POST /api/v1/apps/{uuid}/addons/{id}/rotate_password` - Rotate addon password (only for certain addon types - databases like PostgreSQL/MySQL, caches like Valkey)
 - `POST /api/v1/apps/{uuid}/addons/{id}/create_replica` - Create a read replica of a PostgreSQL addon (primary only, optional `cpu_size`/`ram_size` params, requires `apps:operate`)
 - `POST /api/v1/apps/{uuid}/addons/{id}/promote_replica` - Promote a read replica to a standalone PostgreSQL instance (replica only, requires `apps:operate`)
 - `POST /api/v1/apps/{uuid}/addons/{id}/promote_external` - Promote an external replica to standalone instance or cluster by disconnecting from external source (preserves current mode, requires `apps:operate`)
-- `GET /api/v1/apps/{uuid}/addons/{id}/backups` - Get addon backups (PostgreSQL primary only, not available for replicas)
-- `POST /api/v1/apps/{uuid}/addons/{id}/restore_backup` - Restore addon from backup (PostgreSQL primary only, not available for replicas; requires `apps:operate`)
+- `GET /api/v1/apps/{uuid}/addons/{id}/backups` - Get addon backups (PostgreSQL primary only, not available for replicas). Answers `503` when the backup state cannot be read from the cluster: retry later, it does not mean backups are disabled. `backup_enabled` is the configured setting and changes as soon as an update is accepted; `backup_active` is what the cluster runs right now and catches up asynchronously. After enabling backups, `backup_enabled: true` with `backup_active: false` means the change is still being applied, not that it was ignored — poll until `backup_active` matches. `backup_enabled` is always `false` on the free plan
+- `POST /api/v1/apps/{uuid}/addons/{id}/restore_backup` - Restore addon from backup (PostgreSQL primary only, not available for replicas; requires `apps:operate`). Optional `backup_name` or `target_time` (not both), and boolean `to_new_cluster`: `true` restores into a new cluster and leaves the current one running, omitted or `false` replaces the current database
 - `POST /api/v1/apps/{uuid}/addons/{id}/reset_database` - Reset addon database (PostgreSQL primary only, not available for replicas; requires `apps:manage`, because nothing brings the data back)
 
 ## Services
@@ -78,7 +78,7 @@ For PostgreSQL databases, also ask about:
 - `GET /api/v1/services` - List all services (includes `role` and `primary_addon_uuid` fields for PostgreSQL services)
 - `POST /api/v1/services` - Create service (types: postgres, shared_storage. PostgreSQL supports `creation_mode`: `fresh` or `external_replica`, and `instances` [1, 3, 5, 7] for HA clusters)
 - `GET /api/v1/services/{id}` - Get service details (includes `role`, `primary_addon_uuid`, and `replicas` for PostgreSQL primaries)
-- `PUT /api/v1/services/{id}` - Update service (PostgreSQL supports `instances` [1, 3, 5, 7] for scaling cluster nodes). `project_id` moves the service to another project (requires `services:manage`); a service that belongs to a stack moves with the stack instead
+- `PUT /api/v1/services/{id}` - Update service (PostgreSQL supports `instances` [1, 3, 5, 7] for scaling cluster nodes, boolean `backup_enabled` and `public_access`, and a 6-field cron `scheduled_backup`). `project_id` moves the service to another project (requires `services:manage`); a service that belongs to a stack moves with the stack instead
 - `DELETE /api/v1/services/{id}` - Delete service (deleting a primary cascades to all its replicas)
 - `PATCH /api/v1/services/{id}/state` - Change service state (process_start/process_stop/process_restart)
 - `POST /api/v1/services/{id}/rotate_password` - Rotate service password (databases and caches only, returns new password)
@@ -87,8 +87,8 @@ For PostgreSQL databases, also ask about:
 - `POST /api/v1/services/{id}/create_replica` - Create a read replica of a PostgreSQL service (primary only, optional `cpu_size`/`ram_size` params, requires `services:operate`)
 - `POST /api/v1/services/{id}/promote_replica` - Promote a read replica to a standalone PostgreSQL instance (replica only, requires `services:operate`)
 - `POST /api/v1/services/{id}/promote_external` - Promote a service external replica to standalone instance or cluster by disconnecting from external source (preserves current mode, requires `services:operate`)
-- `GET /api/v1/services/{id}/backups` - Get service backups (PostgreSQL primary only, not available for replicas)
-- `POST /api/v1/services/{id}/restore_backup` - Restore service from backup (PostgreSQL primary only, not available for replicas)
+- `GET /api/v1/services/{id}/backups` - Get service backups (PostgreSQL primary only, not available for replicas). Answers `503` when the backup state cannot be read from the cluster: retry later, it does not mean backups are disabled. `backup_enabled` is the configured setting and changes as soon as an update is accepted; `backup_active` is what the cluster runs right now and catches up asynchronously. After enabling backups, `backup_enabled: true` with `backup_active: false` means the change is still being applied, not that it was ignored — poll until `backup_active` matches. `backup_enabled` is always `false` on the free plan
+- `POST /api/v1/services/{id}/restore_backup` - Restore service from backup (PostgreSQL primary only, not available for replicas). Optional `backup_name` or `target_time` (not both), and boolean `to_new_cluster`: `true` restores into a new cluster and leaves the current one running, omitted or `false` replaces the current database
 - `POST /api/v1/services/{id}/reset_database` - Reset service database (PostgreSQL primary only, not available for replicas; requires `services:manage`, because nothing brings the data back)
 
 ## Create App Addon (`POST /api/v1/apps/{uuid}/addons`)
@@ -116,7 +116,7 @@ A PostgreSQL database addon. Supports two creation modes: fresh database or exte
 
 *   **Type-specific Parameters:**
     *   `postgres_version` (string, **required**): The major version of PostgreSQL. Accepted values: `'18'`, `'17'`, `'16'`, `'15'`, `'14'`, `'13'`. Any other value is rejected with `400`.
-    *   `public_access` (string): Enable public internet access. Use `'1'` for enabled, `'0'` for disabled.
+    *   `public_access` (boolean): Enable public internet access. `true`/`false`; `'1'`/`'0'` are also accepted.
     *   `instances` (integer): Number of database instances. Allowed values: `1` (standalone, default), `3`, `5`, or `7` for a High Availability cluster.
     *   `creation_mode` (string): `'fresh'` (new empty database, default) or `'external_replica'` (replica of an external PostgreSQL database). An external replica is always created with public access.
 
@@ -129,8 +129,8 @@ A PostgreSQL database addon. Supports two creation modes: fresh database or exte
     *   `ca_crt` (string): CA certificate (required when `auth_type` is `'tls'`).
     *   `tls_crt` (string): TLS client certificate (required when `auth_type` is `'tls'`).
     *   `tls_key` (string): TLS client key (required when `auth_type` is `'tls'`).
-    *   `s3_enabled` (string): `'1'` to enable optional S3 WAL archive fallback.
-    *   `s3_endpoint`, `s3_bucket`, `s3_path`, `s3_access_key`, `s3_secret_key` (strings): S3 configuration (required when `s3_enabled` is `'1'`).
+    *   `s3_enabled` (boolean): `true` to enable optional S3 WAL archive fallback.
+    *   `s3_endpoint`, `s3_bucket`, `s3_path`, `s3_access_key`, `s3_secret_key` (strings): S3 configuration (required when `s3_enabled` is `true`).
 
 **Example questions:**
 
@@ -208,7 +208,7 @@ A standalone PostgreSQL database service. Supports two creation modes: fresh dat
 
 *   **Type-specific Parameters:**
     *   `postgres_version` (string, **required**): The major version of PostgreSQL. Accepted values: `'18'`, `'17'`, `'16'`, `'15'`, `'14'`, `'13'`. Any other value is rejected with `400`.
-    *   `public_access` (string): Enable public internet access. Use `'1'` for enabled, `'0'` for disabled.
+    *   `public_access` (boolean): Enable public internet access. `true`/`false`; `'1'`/`'0'` are also accepted.
     *   `environment_variables` (boolean): If `true`, writes the connection variables to the **project** the service belongs to — `<SERVICE_NAME>_URL` and `DATABASE_URL` — so every app in that project inherits them. An existing project variable of the same name is not overwritten.
     *   `instances` (integer): Number of database instances. Allowed values: `1` (standalone, default), `3`, `5`, or `7` for a High Availability cluster.
     *   `creation_mode` (string): `'fresh'` (new empty database, default) or `'external_replica'` (replica of an external PostgreSQL database).
@@ -222,8 +222,8 @@ A standalone PostgreSQL database service. Supports two creation modes: fresh dat
     *   `ca_crt` (string): CA certificate (required when `auth_type` is `'tls'`).
     *   `tls_crt` (string): TLS client certificate (required when `auth_type` is `'tls'`).
     *   `tls_key` (string): TLS client key (required when `auth_type` is `'tls'`).
-    *   `s3_enabled` (string): `'1'` to enable optional S3 WAL archive fallback.
-    *   `s3_endpoint`, `s3_bucket`, `s3_path`, `s3_access_key`, `s3_secret_key` (strings): S3 configuration (required when `s3_enabled` is `'1'`).
+    *   `s3_enabled` (boolean): `true` to enable optional S3 WAL archive fallback.
+    *   `s3_endpoint`, `s3_bucket`, `s3_path`, `s3_access_key`, `s3_secret_key` (strings): S3 configuration (required when `s3_enabled` is `true`).
 
 **Example questions:**
 
