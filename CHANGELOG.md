@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.4 — 2026-09-16
+
+Database flags take JSON booleans, and reading backups tells a setting that was saved apart from one the cluster has applied. An agent that enabled backups used to read them back as still off and conclude the request had been ignored.
+
+- **`GET .../backups` separates the setting from the cluster.** `backup_enabled` is now the configured setting and reflects an update as soon as it is accepted. The new `backup_active` is what the cluster runs, and it catches up asynchronously. `backup_enabled: true` with `backup_active: false` means the change is still being applied: poll until they match. `backup_enabled` is always `false` on the free plan
+- **`backup_enabled`, `public_access`, `s3_enabled` and `to_new_cluster` are booleans.** The first three refused JSON `true` and `false` with `400`. `'1'` and `'0'` are still accepted everywhere
+- **`to_new_cluster: true` on `restore_backup` restores into a new cluster.** It used to be accepted and treated as `false`, which replaced the current database instead. Only `'1'` restored into a new cluster. The skill now documents the parameter, along with `backup_name` and `target_time`
+
 ## 1.0.3 — 2026-09-11
 
 Free-plan applications now sleep when idle, and the skill says what that means for an agent reading `state` or waiting on a response. Cancelling a subscription leaves a five-day window before anything is deleted, and a suspended workspace says in its `403` why it was suspended and what still works. Cloning answers to the permission that creates an application, and a preview-environment config is held to the projects its resource accepts.
