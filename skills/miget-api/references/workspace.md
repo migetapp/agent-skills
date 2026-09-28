@@ -115,9 +115,11 @@ A **Resource** (internally called "Miget") is a compute resource that provides C
 
 ## Project Environment Variables
 
+Addressed by `key`, like app variables; the `id` in the list response is not accepted by any endpoint.
+
 - `GET /api/v1/projects/{project_id}/vars` - List project environment variables
-- `POST /api/v1/projects/{project_id}/vars` - Create project environment variable
-- `PUT /api/v1/projects/{project_id}/vars` - Update project environment variable
+- `POST /api/v1/projects/{project_id}/vars` - Create project environment variable. A key the project already has is refused with `422`
+- `PUT /api/v1/projects/{project_id}/vars` - Set project environment variable (identified by `key` in body): overwrites it if it exists, creates it if not
 - `DELETE /api/v1/projects/{project_id}/vars` - Delete project environment variable
 
 ## Project Secret Files

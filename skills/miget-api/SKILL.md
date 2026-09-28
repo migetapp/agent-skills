@@ -1,7 +1,7 @@
 ---
 name: miget-api
 description: Deploy and manage apps, databases, buckets, private networks and services on Miget PaaS. Covers authentication, resource provisioning, deployments, add-ons, domains, environment variables, VPCs and VPN, and every API endpoint. Use this skill whenever the user mentions Miget, deploying an app to Miget, a miget/resource, or asks to ship, host, scale or debug an application on the Miget platform — including when they only describe the goal ("get this Rails app online", "give my database a private address") without naming Miget.
-version: 1.0.4
+version: 1.0.5
 ---
 
 # Miget API - Guide for AI Agents
@@ -170,7 +170,7 @@ Before asking anything, read the repository. Most of a deployment plan is alread
 
 **Handling `.env` files — read names, never expose values.**
 - Read `.env*` to learn which variables the app expects and to spot which look like secrets.
-- Send values to Miget with `POST /api/v1/apps/{uuid}/vars` (or `app_vars_attributes` at creation).
+- Send values to Miget with `PUT /api/v1/apps/{uuid}/vars`, one variable per request: it creates the key or overwrites it, so it is safe to repeat (or `app_vars_attributes` at creation). `POST` refuses a key the app already has with `422`.
 - **Never print a secret value** in chat, in a summary, in a log line, or in a commit. Refer to variables by name only.
 - Never commit a `.env` file, and never copy secrets into a compose file or a Dockerfile.
 - If a required variable has no value anywhere (a `.env.example` placeholder like `changeme` or an empty string), that is one of the few things genuinely worth asking about — or generate a strong random value when it is clearly an app-internal secret such as `SESSION_SECRET` or `JWT_SECRET`, and tell the user you did.
