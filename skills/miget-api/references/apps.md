@@ -78,9 +78,11 @@ An **Application** is a deployable service (web app, API, worker, etc.).
 
 ## App Environment Variables
 
+Variables are addressed by `key`. The `id` in the list response is not accepted by any endpoint — there is no `/vars/{id}`.
+
 - `GET /api/v1/apps/{uuid}/vars` - List app variables
-- `POST /api/v1/apps/{uuid}/vars` - Create variable
-- `PUT /api/v1/apps/{uuid}/vars` - Update variable (identified by `key` in body). Optionally carries `project_variables_enabled` alongside the change
+- `POST /api/v1/apps/{uuid}/vars` - Create a variable. A key the app already has is refused with `422`
+- `PUT /api/v1/apps/{uuid}/vars` - Set a variable (identified by `key` in body): overwrites it if it exists, creates it if not. Use this whenever you are not certain the key is new. Optionally carries `project_variables_enabled` alongside the change
 - `DELETE /api/v1/apps/{uuid}/vars` - Delete variable (identified by `key` in body)
 - `PUT /api/v1/apps/{uuid}/vars/project_variables_enabled` - Toggle whether the app also receives its **project's** variables (body: `enabled`). Use this to flip the switch on its own; the app's own variables are untouched
 
@@ -617,14 +619,14 @@ POST /api/v1/apps/{app-uuid}/deployments/{deployment-id}/rollback
 # List variables
 GET /api/v1/apps/{app-uuid}/vars
 
-# Create variable
+# Create variable (422 if the key already exists)
 POST /api/v1/apps/{app-uuid}/vars
 {
   "key": "DATABASE_URL",
   "value": "postgresql://..."
 }
 
-# Update variable (identified by key)
+# Set variable (identified by key; creates it or overwrites it)
 PUT /api/v1/apps/{app-uuid}/vars
 {
   "key": "DATABASE_URL",
@@ -643,6 +645,8 @@ DELETE /api/v1/apps/{app-uuid}/vars
 **Required fields:**
 - `key` (string) - Variable name (use SCREAMING_SNAKE_CASE, e.g., `DATABASE_URL`)
 - `value` (string) - Variable value
+
+**A key the app already has is refused with `422`.** To change a value, or to set one without first checking whether it exists, use `PUT /api/v1/apps/{uuid}/vars` with the same body.
 
 **Ask only what you cannot derive:**
 - "What's the variable name? (use SCREAMING_SNAKE_CASE)"

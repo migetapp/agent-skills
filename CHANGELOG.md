@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.5 — 2026-09-28
+
+Setting an environment variable is now `PUT`, which creates the key or overwrites it. The skill used to send every value with `POST`, which refuses a key that already exists, so an agent syncing a `.env` file a second time failed on every variable it had set before.
+
+- **`PUT /api/v1/apps/{uuid}/vars` sets a variable whether or not it exists.** It was documented as updating an existing one only. The skill now uses it when sending values from `.env` files, which makes a repeated sync safe. The same applies to `PUT /api/v1/projects/{project_id}/vars`
+- **`POST` on an existing key is refused with `422`,** and the message names the `PUT` endpoint. It used to return a database error that did not say what to do
+- **Variables are addressed by `key`.** The `id` in `GET .../vars` is not accepted by any endpoint, and there is no `/vars/{id}`
+
 ## 1.0.4 — 2026-09-16
 
 Database flags take JSON booleans, and reading backups tells a setting that was saved apart from one the cluster has applied. An agent that enabled backups used to read them back as still off and conclude the request had been ignored.
